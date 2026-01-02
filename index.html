@@ -1,0 +1,1965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="OSC">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#0a0a0a">
+    <link rel="manifest" href="./manifest.json">
+    
+    <!-- Pixel Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    
+    <title>OSC</title>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; image-rendering: pixelated; }
+        
+        :root {
+            --bg: #0a0a0a; --bg2: #111111; --bg3: #1a1a1a;
+            --text: #00ff00; --dim: #006600; --bright: #44ff44;
+            --warn: #ffcc00; --err: #ff3333; --info: #00aaff; --border: #333333;
+        }
+        
+        body {
+            font-family: 'Press Start 2P', monospace;
+            background: var(--bg); color: var(--text);
+            min-height: 100vh; font-size: 8px; line-height: 1.4;
+        }
+        
+        /* CRT Scanlines */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.1),
+                rgba(0, 0, 0, 0.1) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
+        
+        /* Disable scanlines */
+        body.no-scanlines::before {
+            display: none;
+        }
+        
+        /* === STATUS BAR === */
+        .status-bar {
+            position: fixed; top: 0; left: 0; right: 0;
+            background: var(--bg); border-bottom: 1px solid var(--border);
+            padding: 5px 10px; padding-top: calc(5px + env(safe-area-inset-top));
+            font-size: 8px; display: flex;
+            justify-content: space-between; z-index: 10;
+        }
+        .status-left { color: var(--dim); }
+        .status-right { color: var(--dim); }
+        .status-right.active { color: var(--warn); }
+        
+        /* === HUD (Pinned Info) === */
+        .hud {
+            position: fixed; top: calc(28px + env(safe-area-inset-top)); left: 0; right: 0;
+            background: var(--bg2); border-bottom: 1px solid var(--border);
+            padding: 5px 10px; font-size: 8px; display: none;
+            justify-content: space-between; z-index: 9;
+        }
+        .hud.visible { display: flex; }
+        .hud-item { color: var(--dim); }
+        .hud-item span { color: var(--text); }
+        .hud-item.warn span { color: var(--warn); }
+        .hud-item.err span { color: var(--err); }
+        
+        /* === TERMINAL === */
+        .terminal {
+            min-height: 100vh;
+            padding: 10px 12px;
+            padding-top: calc(35px + env(safe-area-inset-top));
+            padding-bottom: calc(100px + env(safe-area-inset-bottom));
+        }
+        .terminal.with-hud { padding-top: calc(65px + env(safe-area-inset-top)); }
+        
+        .console-output {
+            font-size: 8px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        .line { margin-bottom: 1px; }
+        .line.error { color: var(--err); }
+        .line.warn { color: var(--warn); }
+        .line.dim { color: var(--dim); }
+        .line.bright { color: var(--bright); }
+        .line.info { color: var(--info); }
+        .line.hint { color: #003300; font-style: italic; }
+        
+        /* === QUICK ACTIONS === */
+        .quick-actions {
+            position: fixed; bottom: calc(50px + env(safe-area-inset-bottom)); left: 0; right: 0;
+            background: var(--bg); border-top: 1px solid var(--border);
+            padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 5px;
+            justify-content: center; z-index: 8;
+        }
+        .quick-btn {
+            padding: 5px 10px; background: var(--bg2); border: 1px solid var(--border);
+            color: var(--dim); font-family: inherit; font-size: 8px;
+            cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px;
+            transition: all 0.1s;
+        }
+        .quick-btn:active, .quick-btn.highlight {
+            background: var(--text); color: var(--bg); border-color: var(--text);
+        }
+        .quick-btn.primary { border-color: var(--text); color: var(--text); }
+        .quick-btn.warn { border-color: var(--warn); color: var(--warn); }
+        .quick-btn.hidden { display: none; }
+        
+        /* === COMMAND BAR === */
+        .cmd-bar {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            background: var(--bg); border-top: 1px solid var(--border);
+            padding: 10px 12px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
+            display: flex; align-items: center; gap: 8px;
+        }
+        .cmd-prompt { color: var(--bright); font-weight: bold; cursor: pointer; padding: 10px 5px 10px 0; }
+        .cmd-input {
+            flex: 1; background: transparent; border: none; color: var(--text);
+            font-family: inherit; font-size: 8px; outline: none;
+        }
+        .cmd-input::placeholder { color: var(--dim); }
+        
+        /* === AUTOCOMPLETE === */
+        .autocomplete {
+            position: fixed; bottom: calc(80px + env(safe-area-inset-bottom)); left: 12px; right: 12px;
+            background: var(--bg2); border: 1px solid var(--border);
+            display: none; max-height: 120px; overflow-y: auto; z-index: 20;
+        }
+        .autocomplete.visible { display: block; }
+        .ac-item {
+            padding: 6px 10px; cursor: pointer; font-size: 8px;
+            display: flex; justify-content: space-between;
+        }
+        .ac-item:hover, .ac-item.selected { background: var(--bg3); }
+        .ac-item-cmd { color: var(--text); }
+        .ac-item-desc { color: var(--dim); font-size: 8px; }
+    </style>
+</head>
+<body>
+    <div class="status-bar">
+        <span class="status-left" id="statusLeft">OSC</span>
+        <span class="status-right" id="statusRight">IDLE</span>
+    </div>
+    
+    <div class="hud" id="hud">
+        <div class="hud-item" id="hudSession">SESSION: <span>—</span></div>
+        <div class="hud-item" id="hudTask">TASK: <span>—</span></div>
+        <div class="hud-item" id="hudLoad">LOAD: <span>—</span></div>
+    </div>
+    
+    <div class="terminal" id="terminal">
+        <div class="console-output" id="output"></div>
+    </div>
+    
+    <div class="quick-actions" id="quickActions"></div>
+    
+    <div class="autocomplete" id="autocomplete"></div>
+    
+    <div class="cmd-bar">
+        <span class="cmd-prompt">&gt;</span>
+        <input type="text" class="cmd-input" id="input" placeholder="" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+
+<script>
+// ===========================================================================
+// OSC — OPERATOR SESSION CONSOLE
+// ===========================================================================
+
+const APP_VERSION = '5.0';
+
+const $ = id => document.getElementById(id);
+const S = {
+    get: k => { try { return JSON.parse(localStorage.getItem('osc_' + k)); } catch { return null; } },
+    set: (k, v) => localStorage.setItem('osc_' + k, JSON.stringify(v)),
+    events: () => S.get('events') || [],
+    append: e => { const ev = S.events(); ev.push(e); S.set('events', ev); return e; },
+    config: () => S.get('config') || { safeWindowMinutes: 90 }
+};
+
+// ===========================================================================
+// COGNITIVE ENGINE
+// ===========================================================================
+
+const Cog = {
+    calc(startTime, events, cfg = S.config(), endTime = null) {
+        const now = endTime ? new Date(endTime).getTime() : Date.now();
+        const start = new Date(startTime).getTime();
+        const durMin = (now - start) / 60000;
+        const safeWindow = cfg.safeWindowMinutes || 90;
+        
+        const taskStarts = events.filter(e => e.type === 'TASK_STARTED');
+        const taskFails = events.filter(e => e.type === 'TASK_FAILED');
+        const taskDone = events.filter(e => e.type === 'TASK_COMPLETED');
+        const totalFinished = taskDone.length + taskFails.length;
+        
+        const durPen = Math.min(25, (durMin / safeWindow) * 25);
+        const switchRate = durMin > 1 ? taskStarts.length / durMin : 0;
+        const switchPen = Math.min(25, switchRate * 25);
+        
+        let idleMin = 0;
+        const sorted = [...events].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        for (let i = 1; i < sorted.length; i++) {
+            const gap = (new Date(sorted[i].timestamp) - new Date(sorted[i-1].timestamp)) / 60000;
+            if (gap > 5) idleMin += gap;
+        }
+        const idlePen = Math.min(25, (idleMin / 15) * 25);
+        
+        const errDensity = totalFinished > 0 ? taskFails.length / totalFinished : 0;
+        const errPen = Math.min(25, errDensity * 50);
+        
+        const hour = new Date(now).getHours();
+        const nightPen = (hour >= 22 || hour < 6) ? 15 : 0;
+        
+        const score = Math.round(durPen + switchPen + idlePen + errPen + nightPen);
+        const level = score >= 75 ? 'CRITICAL' : score >= 50 ? 'HIGH' : score >= 25 ? 'MED' : 'LOW';
+        
+        return {
+            level, score,
+            factors: {
+                duration: { value: Math.round(durMin), max: safeWindow, penalty: Math.round(durPen) },
+                switchRate: { value: switchRate.toFixed(2), penalty: Math.round(switchPen) },
+                idleGaps: { value: Math.round(idleMin), penalty: Math.round(idlePen) },
+                errors: { value: taskFails.length, total: totalFinished, penalty: Math.round(errPen) },
+                circadian: { night: nightPen > 0, penalty: nightPen }
+            }
+        };
+    }
+};
+
+// ===========================================================================
+// SESSION MANAGER (Multi-task support)
+// ===========================================================================
+
+const SM = {
+    session: null,
+    tasks: new Map(),  // Multiple active tasks
+    focusTaskId: null, // Current focus task
+    
+    genId: p => `${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
+    shortId: id => id ? id.slice(-4) : '0000',
+    
+    emit(type, sid, payload = {}) {
+        return S.append({ id: SM.genId('evt'), type, sessionId: sid, timestamp: new Date().toISOString(), payload });
+    },
+    
+    restore() {
+        const ev = S.events();
+        const starts = ev.filter(e => e.type === 'SESSION_STARTED');
+        const ends = ev.filter(e => e.type === 'SESSION_ENDED');
+        const endIds = new Set(ends.map(e => e.sessionId));
+        const open = [...starts].reverse().find(s => !endIds.has(s.sessionId));
+        
+        if (open) {
+            SM.session = { id: open.sessionId, intent: open.payload.intent, startedAt: open.timestamp };
+            SM.tasks.clear();
+            SM.focusTaskId = null;
+            const se = ev.filter(e => e.sessionId === SM.session.id);
+            
+            // Restore all active tasks
+            const taskEnds = se.filter(e => ['TASK_COMPLETED', 'TASK_FAILED', 'TASK_ABANDONED'].includes(e.type));
+            const endedTaskIds = new Set(taskEnds.map(e => e.payload.taskId));
+            
+            se.filter(e => e.type === 'TASK_STARTED').forEach(e => {
+                if (!endedTaskIds.has(e.payload.taskId)) {
+                    SM.tasks.set(e.payload.taskId, { id: e.payload.taskId, label: e.payload.label, startedAt: e.timestamp });
+                    SM.focusTaskId = e.payload.taskId; // Last active task becomes focus
+                }
+            });
+        }
+    },
+    
+    active: () => !!SM.session,
+    hasTask: () => SM.tasks.size > 0,
+    taskCount: () => SM.tasks.size,
+    
+    // Get focus task or find by ID
+    getFocusTask() {
+        if (SM.focusTaskId && SM.tasks.has(SM.focusTaskId)) {
+            return SM.tasks.get(SM.focusTaskId);
+        }
+        // Fallback to last task if focus is invalid
+        const keys = Array.from(SM.tasks.keys());
+        return keys.length > 0 ? SM.tasks.get(keys[keys.length - 1]) : null;
+    },
+    
+    // Set focus task by ID hint
+    setFocus(idHint) {
+        const t = SM.findTaskById(idHint);
+        if (!t) throw `ERR: Task not found: ${idHint}`;
+        SM.focusTaskId = t.id;
+        return { ...t, shortId: SM.shortId(t.id) };
+    },
+    
+    // Find task by ID (not using focus)
+    findTaskById(idHint) {
+        if (!idHint) return null;
+        
+        // Strip brackets if user copied [id] format
+        let cleanId = idHint.replace(/[\[\]]/g, '').trim();
+        
+        // Try exact match first
+        if (SM.tasks.has(cleanId)) return SM.tasks.get(cleanId);
+        
+        // Try short ID match (last 4-6 chars)
+        for (const [id, task] of SM.tasks) {
+            const shortId = SM.shortId(id);
+            if (shortId === cleanId || id.endsWith(cleanId) || id.includes(cleanId)) {
+                return task;
+            }
+        }
+        return null;
+    },
+    
+    // Get task by ID hint or return focus task
+    findTask(idHint) {
+        if (!idHint) {
+            // Return focus task
+            return SM.getFocusTask();
+        }
+        return SM.findTaskById(idHint);
+    },
+    
+    enter(intent) {
+        if (SM.session) throw 'ERR: Session active. Use "exit" first.';
+        if (!intent) throw 'ERR: Intent required. Usage: enter <intent>';
+        const sid = 's_' + Date.now();
+        const e = SM.emit('SESSION_STARTED', sid, { intent });
+        SM.session = { id: sid, intent, startedAt: e.timestamp };
+        SM.tasks.clear();
+        SM.focusTaskId = null;
+        return SM.session;
+    },
+    
+    exit(outcome = 'COMPLETED', summary = '') {
+        if (!SM.session) throw 'ERR: No active session.';
+        // Abandon all remaining tasks
+        SM.tasks.forEach((t, tid) => SM.emit('TASK_ABANDONED', SM.session.id, { taskId: tid }));
+        SM.emit('SESSION_ENDED', SM.session.id, { outcome, summary });
+        const ev = S.events().filter(e => e.sessionId === SM.session.id);
+        const load = Cog.calc(SM.session.startedAt, ev);
+        const stats = SM.stats(ev);
+        const dur = SM.fmtDur(SM.session.startedAt);
+        const r = { ...SM.session, outcome, summary, duration: dur, stats, load, abandoned: SM.tasks.size };
+        SM.session = null;
+        SM.tasks.clear();
+        SM.focusTaskId = null;
+        return r;
+    },
+    
+    task(label) {
+        if (!SM.session) throw 'ERR: No active session. Use "enter <intent>" first.';
+        if (!label) throw 'ERR: Label required. Usage: task <description>';
+        const tid = 't_' + Date.now() + '_' + Math.random().toString(36).slice(2,4);
+        SM.emit('TASK_STARTED', SM.session.id, { taskId: tid, label });
+        const task = { id: tid, label, startedAt: new Date().toISOString() };
+        SM.tasks.set(tid, task);
+        SM.focusTaskId = tid; // New task becomes focus
+        return { ...task, shortId: SM.shortId(tid), total: SM.tasks.size, isFocus: true };
+    },
+    
+    done(idHint = null) {
+        if (!SM.session) throw 'ERR: No active session.';
+        // Strip brackets if present
+        const cleanId = idHint ? idHint.replace(/[\[\]]/g, '').trim() : null;
+        const t = SM.findTask(cleanId);
+        if (!t) throw cleanId ? `ERR: Task not found: ${cleanId}` : 'ERR: No active tasks.';
+        SM.emit('TASK_COMPLETED', SM.session.id, { taskId: t.id });
+        SM.tasks.delete(t.id);
+        // Update focus if completed task was focus
+        if (SM.focusTaskId === t.id) {
+            const keys = Array.from(SM.tasks.keys());
+            SM.focusTaskId = keys.length > 0 ? keys[keys.length - 1] : null;
+        }
+        return { ...t, shortId: SM.shortId(t.id), duration: SM.fmtDur(t.startedAt), remaining: SM.tasks.size };
+    },
+    
+    fail(args = '') {
+        if (!SM.session) throw 'ERR: No active session.';
+        // Parse: fail [id] [reason] or fail [reason]
+        const parts = args.trim().split(/\s+/);
+        let idHint = null, reason = args;
+        
+        // Check if first word looks like an ID (strip brackets first)
+        if (parts[0]) {
+            const cleaned = parts[0].replace(/[\[\]]/g, '');
+            if (/^[a-z0-9_]{2,6}$/i.test(cleaned) && SM.findTaskById(cleaned)) {
+                idHint = cleaned;
+                parts.shift();
+                reason = parts.join(' ');
+            }
+        }
+        
+        const t = SM.findTask(idHint);
+        if (!t) throw idHint ? `ERR: Task not found: ${idHint}` : 'ERR: No active tasks.';
+        SM.emit('TASK_FAILED', SM.session.id, { taskId: t.id, reason });
+        SM.tasks.delete(t.id);
+        // Update focus if failed task was focus
+        if (SM.focusTaskId === t.id) {
+            const keys = Array.from(SM.tasks.keys());
+            SM.focusTaskId = keys.length > 0 ? keys[keys.length - 1] : null;
+        }
+        return { ...t, shortId: SM.shortId(t.id), reason, remaining: SM.tasks.size };
+    },
+    
+    drop(idHint = null) {
+        if (!SM.session) throw 'ERR: No active session.';
+        // Strip brackets if present
+        const cleanId = idHint ? idHint.replace(/[\[\]]/g, '').trim() : null;
+        const t = SM.findTask(cleanId);
+        if (!t) throw cleanId ? `ERR: Task not found: ${cleanId}` : 'ERR: No active tasks.';
+        SM.emit('TASK_ABANDONED', SM.session.id, { taskId: t.id });
+        SM.tasks.delete(t.id);
+        // Update focus if dropped task was focus
+        if (SM.focusTaskId === t.id) {
+            const keys = Array.from(SM.tasks.keys());
+            SM.focusTaskId = keys.length > 0 ? keys[keys.length - 1] : null;
+        }
+        return { ...t, shortId: SM.shortId(t.id), remaining: SM.tasks.size };
+    },
+    
+    decide(input) {
+        if (!SM.session) throw 'ERR: No active session.';
+        // Support both :: and | as separators
+        let sep = input.indexOf('::');
+        if (sep === -1) sep = input.indexOf('|');
+        if (sep === -1) throw 'ERR: Format: decide <choice> :: <reason>  (or use | as separator)';
+        const choice = input.slice(0, sep).trim();
+        const reason = input.slice(sep + (input[sep] === ':' ? 2 : 1)).trim();
+        if (!choice || !reason) throw 'ERR: Both choice and reason required.';
+        SM.emit('DECISION_LOGGED', SM.session.id, { decisionId: SM.genId('dec'), choice, reason });
+        return { choice, reason };
+    },
+    
+    status() {
+        if (!SM.session) return null;
+        const ev = S.events().filter(e => e.sessionId === SM.session.id);
+        const focusTask = SM.getFocusTask();
+        return {
+            session: SM.session,
+            duration: SM.fmtDur(SM.session.startedAt),
+            activeTasks: Array.from(SM.tasks.values()).map(t => ({ 
+                ...t, 
+                shortId: SM.shortId(t.id),
+                isFocus: t.id === SM.focusTaskId
+            })),
+            focusTask: focusTask ? { ...focusTask, shortId: SM.shortId(focusTask.id) } : null,
+            taskCount: SM.tasks.size,
+            stats: SM.stats(ev),
+            load: Cog.calc(SM.session.startedAt, ev)
+        };
+    },
+    
+    getTasks() {
+        if (!SM.session) return [];
+        const ev = S.events().filter(e => e.sessionId === SM.session.id);
+        const m = new Map();
+        ev.filter(e => e.type === 'TASK_STARTED').forEach(e => 
+            m.set(e.payload.taskId, { id: e.payload.taskId, label: e.payload.label, startedAt: e.timestamp, status: 'ACTIVE' }));
+        ev.filter(e => e.type === 'TASK_COMPLETED').forEach(e => { 
+            if (m.has(e.payload.taskId)) { 
+                const t = m.get(e.payload.taskId);
+                t.status = 'DONE'; t.endedAt = e.timestamp;
+                t.durationMin = Math.round((new Date(e.timestamp) - new Date(t.startedAt)) / 60000);
+            }
+        });
+        ev.filter(e => e.type === 'TASK_FAILED').forEach(e => { 
+            if (m.has(e.payload.taskId)) { 
+                const t = m.get(e.payload.taskId);
+                t.status = 'FAIL'; t.endedAt = e.timestamp; t.reason = e.payload.reason;
+                t.durationMin = Math.round((new Date(e.timestamp) - new Date(t.startedAt)) / 60000);
+            }
+        });
+        ev.filter(e => e.type === 'TASK_ABANDONED').forEach(e => { 
+            if (m.has(e.payload.taskId)) { 
+                const t = m.get(e.payload.taskId);
+                t.status = 'DROP'; t.endedAt = e.timestamp;
+            }
+        });
+        return Array.from(m.values());
+    },
+    
+    getDecisions(sid = null) {
+        const id = sid || SM.session?.id;
+        if (!id) return [];
+        return S.events()
+            .filter(e => e.sessionId === id && e.type === 'DECISION_LOGGED')
+            .map(e => ({ choice: e.payload.choice, reason: e.payload.reason, timestamp: e.timestamp }));
+    },
+    
+    stats: ev => ({
+        completed: ev.filter(e => e.type === 'TASK_COMPLETED').length,
+        failed: ev.filter(e => e.type === 'TASK_FAILED').length,
+        abandoned: ev.filter(e => e.type === 'TASK_ABANDONED').length,
+        decisions: ev.filter(e => e.type === 'DECISION_LOGGED').length
+    }),
+    
+    fmtDur(s) {
+        const m = Math.floor((Date.now() - new Date(s)) / 60000);
+        return m < 60 ? `${m}m` : `${Math.floor(m/60)}h${m%60}m`;
+    },
+    
+    getSessions() {
+        const ev = S.events();
+        const starts = ev.filter(e => e.type === 'SESSION_STARTED');
+        const ends = ev.filter(e => e.type === 'SESSION_ENDED');
+        const endMap = new Map(ends.map(e => [e.sessionId, e]));
+        
+        return starts.map(s => {
+            const end = endMap.get(s.sessionId);
+            const se = ev.filter(e => e.sessionId === s.sessionId);
+            const load = Cog.calc(s.timestamp, se, S.config(), end?.timestamp || null);
+            const endTime = end ? new Date(end.timestamp) : new Date();
+            const durMin = Math.round((endTime - new Date(s.timestamp)) / 60000);
+            const stats = SM.stats(se);
+            
+            return {
+                id: s.sessionId,
+                intent: s.payload.intent,
+                startedAt: s.timestamp,
+                endedAt: end?.timestamp || null,
+                outcome: end?.payload.outcome || 'ACTIVE',
+                summary: end?.payload.summary || '',
+                duration: durMin < 60 ? `${durMin}m` : `${Math.floor(durMin/60)}h${durMin%60}m`,
+                durationMinutes: durMin,
+                stats, load
+            };
+        }).sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
+    },
+    
+    getSession(sid) {
+        return SM.getSessions().find(s => s.id === sid || s.id.includes(sid));
+    },
+    
+    getSessionTasks(sid) {
+        const ev = S.events().filter(e => e.sessionId === sid);
+        const m = new Map();
+        ev.filter(e => e.type === 'TASK_STARTED').forEach(e => 
+            m.set(e.payload.taskId, { id: e.payload.taskId, label: e.payload.label, startedAt: e.timestamp, status: 'ACTIVE' }));
+        ev.filter(e => e.type === 'TASK_COMPLETED').forEach(e => { 
+            if (m.has(e.payload.taskId)) { 
+                const t = m.get(e.payload.taskId);
+                t.status = 'DONE'; t.endedAt = e.timestamp;
+                t.durationMin = Math.round((new Date(e.timestamp) - new Date(t.startedAt)) / 60000);
+            }
+        });
+        ev.filter(e => e.type === 'TASK_FAILED').forEach(e => { 
+            if (m.has(e.payload.taskId)) { 
+                const t = m.get(e.payload.taskId);
+                t.status = 'FAIL'; t.endedAt = e.timestamp; t.reason = e.payload.reason;
+                t.durationMin = Math.round((new Date(e.timestamp) - new Date(t.startedAt)) / 60000);
+            }
+        });
+        ev.filter(e => e.type === 'TASK_ABANDONED').forEach(e => { 
+            if (m.has(e.payload.taskId)) { 
+                const t = m.get(e.payload.taskId);
+                t.status = 'DROP'; t.endedAt = e.timestamp;
+            }
+        });
+        return Array.from(m.values());
+    }
+};
+
+// ===========================================================================
+// EXPORT
+// ===========================================================================
+
+const Export = {
+    // CSV escape helper
+    csvEscape(val) {
+        if (val === null || val === undefined) return '';
+        const str = String(val);
+        if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+            return '"' + str.replace(/"/g, '""') + '"';
+        }
+        return str;
+    },
+    
+    json() {
+        const data = { 
+            exportedAt: new Date().toISOString(), 
+            version: APP_VERSION, 
+            sessions: SM.getSessions(), 
+            events: S.events() 
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a'); 
+        a.href = URL.createObjectURL(blob);
+        a.download = `osc_export_${new Date().toISOString().split('T')[0]}.json`; 
+        a.click();
+        return `Exported ${data.events.length} events, ${data.sessions.length} sessions.`;
+    },
+    
+    csv() {
+        const sessions = SM.getSessions();
+        if (sessions.length === 0) throw 'ERR: No sessions to export.';
+        
+        const headers = [
+            'session_id', 'intent', 'started_at', 'ended_at', 
+            'duration_minutes', 'outcome', 'tasks_completed', 
+            'tasks_failed', 'tasks_abandoned', 'decisions', 
+            'load_level', 'load_score'
+        ];
+        
+        const rows = sessions.map(s => [
+            Export.csvEscape(s.id),
+            Export.csvEscape(s.intent),
+            Export.csvEscape(s.startedAt),
+            Export.csvEscape(s.endedAt || ''),
+            Export.csvEscape(s.durationMinutes),
+            Export.csvEscape(s.outcome),
+            Export.csvEscape(s.stats.completed),
+            Export.csvEscape(s.stats.failed),
+            Export.csvEscape(s.stats.abandoned),
+            Export.csvEscape(s.stats.decisions),
+            Export.csvEscape(s.load.level),
+            Export.csvEscape(s.load.score)
+        ].join(','));
+        
+        const csv = [headers.join(','), ...rows].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const a = document.createElement('a'); 
+        a.href = URL.createObjectURL(blob);
+        a.download = `osc_sessions_${new Date().toISOString().split('T')[0]}.csv`; 
+        a.click();
+        return `Exported ${sessions.length} sessions to CSV.`;
+    }
+};
+
+// ===========================================================================
+// ASCII ART
+// ===========================================================================
+
+const ASCII = {
+    get logo() {
+        return [
+            '',
+            '+============================================+',
+            '|   ####   ####   ####                      |',
+            '|  #    # #      #                          |',
+            '|  #    #  ####  #                          |',
+            '|  #    #      # #                          |',
+            '|   ####   ####   ####                      |',
+            '+============================================+',
+            '|        SESSION   CONSOLE                  |',
+            '+============================================+',
+            '',
+            '     TRACK   |   DECIDE   |   LOG',
+            `              [ v${APP_VERSION} ]`,
+            ''
+        ];
+    },
+    
+    sessionStart: [
+        '+============================================+',
+        '| >> SESSION STARTED                         |',
+        '+============================================+'
+    ],
+    
+    sessionEnd: [
+        '+============================================+',
+        '| ## SESSION ENDED                           |',
+        '+============================================+'
+    ],
+    
+    taskBox(label, id, status = 'active') {
+        const icons = { active: '*', done: '+', fail: 'x', drop: '-' };
+        const icon = icons[status] || '*';
+        const maxLen = 34;
+        const truncLabel = label.length > maxLen ? label.slice(0, maxLen) + '..' : label;
+        return [
+            `+============================================+`,
+            `| ${icon} [${id}] ${truncLabel.padEnd(maxLen)} |`,
+            `+============================================+`
+        ];
+    },
+    
+    tasksHeader: [
+        '+============================================+',
+        '| ## TASKS                                   |',
+        '+--------------------------------------------+'
+    ],
+    
+    tasksFooter: [
+        '+============================================+'
+    ],
+    
+    historyHeader: [
+        '+============================================+',
+        '| >> HISTORY                                 |',
+        '+--------------------------------------------+'
+    ],
+    
+    historyFooter: [
+        '+============================================+'
+    ],
+    
+    reportHeader(intent) {
+        const maxLen = 40;
+        const truncIntent = intent.length > maxLen ? intent.slice(0, maxLen) + '..' : intent;
+        return [
+            '+============================================+',
+            '| ** REPORT                                  |',
+            '+--------------------------------------------+',
+            `| ${truncIntent.padEnd(42)} |`,
+            '+--------------------------------------------+'
+        ];
+    },
+    
+    reportFooter: [
+        '+============================================+'
+    ],
+    
+    loadMeter(score, level) {
+        const width = 24;
+        const filled = Math.round((score / 100) * width);
+        const empty = width - filled;
+        const bar = '#'.repeat(filled) + '-'.repeat(empty);
+        return [
+            '+============================================+',
+            '| ## COGNITIVE LOAD                          |',
+            '+--------------------------------------------+',
+            `| [${bar}] ${String(score).padStart(3)}%          |`,
+            `| Level: ${level.padEnd(34)} |`,
+            '+============================================+'
+        ];
+    },
+    
+    decision: [
+        '+============================================+',
+        '| DECISION                                   |',
+        '+--------------------------------------------+'
+    ],
+    
+    decisionEnd: [
+        '+============================================+'
+    ],
+    
+    statusBox(intent, duration, tasks, load) {
+        return [
+            '+============================================+',
+            '| ** CURRENT SESSION                         |',
+            '+--------------------------------------------+',
+            `| Intent: ${intent.slice(0,34).padEnd(34)} |`,
+            `| Time:   ${duration.padEnd(34)} |`,
+            `| Tasks:  ${String(tasks).padEnd(34)} |`,
+            `| Load:   ${load.padEnd(34)} |`,
+            '+============================================+'
+        ];
+    }
+};
+
+// ===========================================================================
+// TUTORIAL SYSTEM
+// ===========================================================================
+
+const Tutorial = {
+    active: false,
+    step: 0,
+    
+    steps: [
+        {
+            title: 'Welcome to OSC',
+            text: [
+                'OSC tracks your work sessions, tasks, decisions, and cognitive load.',
+                '',
+                'Let\'s learn the basics in 2 minutes.',
+                '',
+                'Type: tutorial start'
+            ],
+            expect: 'tutorial start',
+            hint: 'tutorial start'
+        },
+        {
+            title: 'Step 1: Start a Session',
+            text: [
+                'A SESSION is a focused work block (1-3 hours).',
+                'Every session has an INTENT — what you plan to accomplish.',
+                '',
+                'Start a session now. Type:',
+                '  enter Testing OSC'
+            ],
+            expect: /^enter\s+.+/i,
+            hint: 'enter Testing OSC'
+        },
+        {
+            title: 'Step 2: Add a Task',
+            text: [
+                'Good! You\'re now in a session.',
+                '',
+                'TASKS are specific actions within a session.',
+                'You can have multiple tasks running at once.',
+                '',
+                'Add your first task:',
+                '  task Learn the basics'
+            ],
+            expect: /^task\s+.+/i,
+            hint: 'task Learn the basics'
+        },
+        {
+            title: 'Step 3: Complete a Task',
+            text: [
+                'Task started! Notice the [id] — you\'ll use it if you have multiple tasks.',
+                '',
+                'When a task is done, mark it complete:',
+                '  done'
+            ],
+            expect: /^done/i,
+            hint: 'done'
+        },
+        {
+            title: 'Step 4: Add More Tasks',
+            text: [
+                'Great! Now add TWO more tasks to see multi-tasking:',
+                '  task Read documentation',
+                '  task Try commands',
+                '',
+                'Add the first one now:'
+            ],
+            expect: /^task\s+.+/i,
+            hint: 'task Read documentation'
+        },
+        {
+            title: 'Step 4b: Second Task',
+            text: [
+                'Now add the second task:'
+            ],
+            expect: /^task\s+.+/i,
+            hint: 'task Try commands'
+        },
+        {
+            title: 'Step 5: View Active Tasks',
+            text: [
+                'You now have 2 active tasks running in parallel.',
+                'Check the HUD above — it shows task count.',
+                '',
+                'List all tasks with their IDs:',
+                '  tasks'
+            ],
+            expect: /^tasks/i,
+            hint: 'tasks'
+        },
+        {
+            title: 'Step 6: Complete Specific Task',
+            text: [
+                'See the [xxxx] IDs? Use them to complete a specific task.',
+                '',
+                'Complete both tasks:',
+                '  done (completes last added)',
+                '  done (completes the remaining one)',
+                '',
+                'Type: done'
+            ],
+            expect: /^done/i,
+            hint: 'done'
+        },
+        {
+            title: 'Step 6b: Complete Last Task',
+            text: [
+                'One more:',
+                '  done'
+            ],
+            expect: /^done/i,
+            hint: 'done'
+        },
+        {
+            title: 'Step 7: Log a Decision',
+            text: [
+                'DECISIONS record WHY you chose something.',
+                'Format: decide <what> :: <why>',
+                '',
+                'Try it:',
+                '  decide Use OSC daily :: Tracks time, decisions, and burnout'
+            ],
+            expect: /^decide\s+.+(::|[|]).+/i,
+            hint: 'decide Use OSC daily :: Tracks my work'
+        },
+        {
+            title: 'Step 8: Check Cognitive Load',
+            text: [
+                'OSC monitors your cognitive load based on:',
+                '• Session duration',
+                '• Task switching rate', 
+                '• Errors/failures',
+                '• Time of day',
+                '',
+                'Check your current load:',
+                '  load'
+            ],
+            expect: /^load/i,
+            hint: 'load'
+        },
+        {
+            title: 'Step 9: End Session',
+            text: [
+                'When you\'re done with a work block, end the session.',
+                'You can add an outcome: completed, aborted, timeout',
+                '',
+                'End this session:',
+                '  exit completed Learned OSC basics'
+            ],
+            expect: /^exit/i,
+            hint: 'exit completed Done with tutorial'
+        },
+        {
+            title: 'Step 10: View History',
+            text: [
+                'Session complete! All your sessions are saved.',
+                '',
+                'View your history:',
+                '  history'
+            ],
+            expect: /^history/i,
+            hint: 'history'
+        },
+        {
+            title: 'Tutorial Complete! 🎉',
+            text: [
+                '+============================================+',
+                '| You now know the essentials:               |',
+                '+============================================+',
+                '',
+                '  enter <intent>   Start focused work',
+                '  task <what>      Add task',
+                '  done [id]        Complete task',
+                '  fail [id]        Mark failed', 
+                '  decide X :: Y    Log decision',
+                '  load             Check load',
+                '  exit             End session',
+                '  history          Past sessions',
+                '',
+                '+============================================+',
+                '| Tips:                                      |',
+                '+--------------------------------------------+',
+                '|  Tab — autocomplete                        |',
+                '|  ↑/↓ — command history                     |',
+                '|  help — full command list                  |',
+                '+============================================+',
+                '',
+                'Start: enter <your intent>'
+            ],
+            expect: null,
+            final: true
+        }
+    ],
+    
+    isFirstRun() {
+        return S.events().length === 0 && !S.get('tutorialDone');
+    },
+    
+    start() {
+        Tutorial.active = true;
+        Tutorial.step = 0;
+        Tutorial.showStep();
+    },
+    
+    showStep() {
+        const s = Tutorial.steps[Tutorial.step];
+        UI.print('');
+        UI.print(`--- ${s.title} ---`, 'bright');
+        s.text.forEach(line => UI.print(line, line.startsWith('  ') ? 'info' : ''));
+        
+        if (s.hint) {
+            UI.input.placeholder = s.hint;
+        }
+        
+        if (s.final) {
+            Tutorial.complete();
+        }
+    },
+    
+    check(input) {
+        if (!Tutorial.active) return false;
+        
+        const s = Tutorial.steps[Tutorial.step];
+        if (!s.expect) return false;
+        
+        const matches = typeof s.expect === 'string' 
+            ? input.toLowerCase() === s.expect.toLowerCase()
+            : s.expect.test(input);
+        
+        if (matches) {
+            Tutorial.step++;
+            // Show next step after command executes
+            setTimeout(() => {
+                if (Tutorial.step < Tutorial.steps.length) {
+                    Tutorial.showStep();
+                }
+            }, 100);
+        }
+        
+        return false; // Don't prevent command execution
+    },
+    
+    complete() {
+        Tutorial.active = false;
+        S.set('tutorialDone', true);
+    },
+    
+    reset() {
+        S.set('tutorialDone', false);
+        Tutorial.active = false;
+        Tutorial.step = 0;
+    }
+};
+
+// ===========================================================================
+// COMMANDS REGISTRY (for autocomplete)
+// ===========================================================================
+
+const COMMANDS = [
+    { cmd: 'enter', desc: 'Start session', usage: 'enter <intent>', ctx: 'idle' },
+    { cmd: 'exit', desc: 'End session', usage: 'exit [outcome] [note]', ctx: 'active' },
+    { cmd: 'task', desc: 'Start task', usage: 'task <description>', ctx: 'active' },
+    { cmd: 'done', desc: 'Complete task', usage: 'done [id]', ctx: 'has_task' },
+    { cmd: 'fail', desc: 'Fail task', usage: 'fail [id] [reason]', ctx: 'has_task' },
+    { cmd: 'drop', desc: 'Abandon task', usage: 'drop [id]', ctx: 'has_task' },
+    { cmd: 'focus', desc: 'Set focus task', usage: 'focus [id]', ctx: 'has_task' },
+    { cmd: 'tasks', desc: 'List tasks', usage: 'tasks', ctx: 'active' },
+    { cmd: 'decide', desc: 'Log decision', usage: 'decide <choice> :: <reason>', ctx: 'active' },
+    { cmd: 'status', desc: 'Session status', usage: 'status', ctx: 'active' },
+    { cmd: 'decisions', desc: 'List decisions', usage: 'decisions', ctx: 'active' },
+    { cmd: 'load', desc: 'Cognitive load', usage: 'load', ctx: 'active' },
+    { cmd: 'history', desc: 'Past sessions', usage: 'history [#]', ctx: 'any' },
+    { cmd: 'report', desc: 'Session report', usage: 'report [id|active]', ctx: 'any' },
+    { cmd: 'export', desc: 'Export data', usage: 'export json|csv', ctx: 'any' },
+    { cmd: 'config', desc: 'Settings', usage: 'config [key] [value]', ctx: 'any' },
+    { cmd: 'scanlines', desc: 'Toggle scanlines', usage: 'scanlines on|off', ctx: 'any' },
+    { cmd: 'tutorial', desc: 'Interactive guide', usage: 'tutorial', ctx: 'any' },
+    { cmd: 'help', desc: 'Show help', usage: 'help', ctx: 'any' },
+    { cmd: 'clear', desc: 'Clear console', usage: 'clear', ctx: 'any' },
+    { cmd: 'reset', desc: 'Delete all data', usage: 'reset confirm', ctx: 'any' }
+];
+
+// ===========================================================================
+// UI
+// ===========================================================================
+
+const UI = {
+    output: null, input: null, status: null, hud: null, quickActions: null, autocomplete: null, terminal: null,
+    _cmdHistory: [], _cmdHistoryPos: 0, _acIndex: -1, _acVisible: false,
+    _lastHintKey: null, _lastLoadWarn: null, _lastLoadWarnTime: 0,
+    _hudInterval: null,
+    _lastHistorySessions: [], // Store last history result for quick access
+    
+    init() {
+        UI.output = $('output');
+        UI.input = $('input');
+        UI.status = $('statusRight');
+        UI.statusLeft = $('statusLeft');
+        UI.hud = $('hud');
+        UI.quickActions = $('quickActions');
+        UI.autocomplete = $('autocomplete');
+        UI.terminal = $('terminal');
+        
+        // Set version in status bar
+        UI.statusLeft.textContent = `OSC v${APP_VERSION}`;
+        
+        // Apply scanlines setting
+        const cfg = S.config();
+        if (cfg.scanlines === false) {
+            document.body.classList.add('no-scanlines');
+        }
+        
+        SM.restore();
+        UI._cmdHistory = S.get('cmdHistory') || [];
+        UI._cmdHistoryPos = UI._cmdHistory.length;
+        
+        // ASCII Logo
+        ASCII.logo.forEach(line => UI.print(line, 'bright'));
+        
+        // Check for first run
+        if (Tutorial.isFirstRun()) {
+            UI.print('First time? Try "tutorial"', 'info');
+            UI.input.placeholder = 'tutorial';
+        } else {
+            UI.print('Ready.', 'dim');
+        }
+        
+        UI.input.addEventListener('keydown', UI.handleKey);
+        UI.input.addEventListener('input', UI.handleInput);
+        
+        // Mobile: tap on prompt to toggle autocomplete
+        const prompt = document.querySelector('.cmd-prompt');
+        if (prompt) {
+            prompt.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (UI._acVisible) {
+                    UI.hideAutocomplete();
+                } else {
+                    UI.showAutocomplete();
+                }
+                UI.input.focus();
+            });
+        }
+        
+        UI.updateAll();
+        UI.input.focus();
+        
+        // Live HUD update every 30s
+        UI._hudInterval = setInterval(() => { if (SM.active()) UI.updateHUD(); }, 30000);
+        
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js').catch(() => {});
+        }
+    },
+    
+    handleKey(e) {
+        // Tab - autocomplete
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            if (!UI._acVisible) {
+                UI.showAutocomplete();
+            } else {
+                UI.selectAutocomplete();
+            }
+            return;
+        }
+        
+        // Escape - close autocomplete
+        if (e.key === 'Escape') {
+            UI.hideAutocomplete();
+            return;
+        }
+        
+        // Arrow navigation in autocomplete
+        if (UI._acVisible && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+            e.preventDefault();
+            UI.navigateAutocomplete(e.key === 'ArrowDown' ? 1 : -1);
+            return;
+        }
+        
+        // Command history
+        if (!UI._acVisible && e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (UI._cmdHistory.length === 0) return;
+            UI._cmdHistoryPos = Math.max(0, UI._cmdHistoryPos - 1);
+            UI.input.value = UI._cmdHistory[UI._cmdHistoryPos] || '';
+            return;
+        }
+        if (!UI._acVisible && e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (UI._cmdHistory.length === 0) return;
+            UI._cmdHistoryPos = Math.min(UI._cmdHistory.length, UI._cmdHistoryPos + 1);
+            UI.input.value = UI._cmdHistoryPos === UI._cmdHistory.length ? '' : (UI._cmdHistory[UI._cmdHistoryPos] || '');
+            return;
+        }
+        
+        // Enter - execute
+        if (e.key === 'Enter') {
+            if (UI._acVisible) {
+                UI.selectAutocomplete();
+                return;
+            }
+            const cmd = UI.input.value.trim();
+            UI.input.value = '';
+            if (!cmd) return;
+            
+            UI._cmdHistory.push(cmd);
+            UI._cmdHistory = UI._cmdHistory.slice(-50);
+            UI._cmdHistoryPos = UI._cmdHistory.length;
+            S.set('cmdHistory', UI._cmdHistory);
+            
+            UI.exec(cmd);
+        }
+    },
+    
+    handleInput() {
+        if (UI._acVisible) UI.updateAutocomplete();
+    },
+    
+    // === AUTOCOMPLETE ===
+    showAutocomplete() {
+        const prefix = UI.input.value.toLowerCase().trim();
+        
+        let cmds = COMMANDS.filter(c => {
+            if (c.ctx === 'any') return true;
+            if (c.ctx === 'idle' && !SM.active()) return true;
+            if (c.ctx === 'active' && SM.active()) return true;
+            if (c.ctx === 'has_task' && SM.hasTask()) return true;
+            return false;
+        });
+        
+        if (prefix) {
+            cmds = cmds.filter(c => c.cmd.startsWith(prefix));
+        }
+        
+        if (cmds.length === 0) {
+            UI.hideAutocomplete();
+            return;
+        }
+        
+        UI.autocomplete.innerHTML = cmds.map((c, i) => 
+            `<div class="ac-item${i === 0 ? ' selected' : ''}" data-cmd="${c.cmd}" data-usage="${c.usage}">
+                <span class="ac-item-cmd">${c.cmd}</span>
+                <span class="ac-item-desc">${c.desc}</span>
+            </div>`
+        ).join('');
+        
+        UI.autocomplete.querySelectorAll('.ac-item').forEach(el => {
+            el.addEventListener('click', () => {
+                UI.input.value = el.dataset.cmd + ' ';
+                UI.hideAutocomplete();
+                UI.input.focus();
+            });
+        });
+        
+        UI._acIndex = 0;
+        UI._acVisible = true;
+        UI.autocomplete.classList.add('visible');
+    },
+    
+    updateAutocomplete() {
+        const prefix = UI.input.value.toLowerCase().trim();
+        const items = UI.autocomplete.querySelectorAll('.ac-item');
+        let visibleCount = 0;
+        
+        items.forEach(el => {
+            const matches = el.dataset.cmd.startsWith(prefix);
+            el.style.display = matches ? '' : 'none';
+            if (matches) visibleCount++;
+        });
+        
+        if (visibleCount === 0) UI.hideAutocomplete();
+    },
+    
+    navigateAutocomplete(dir) {
+        const items = [...UI.autocomplete.querySelectorAll('.ac-item')].filter(el => el.style.display !== 'none');
+        if (items.length === 0) return;
+        
+        items.forEach(el => el.classList.remove('selected'));
+        UI._acIndex = (UI._acIndex + dir + items.length) % items.length;
+        items[UI._acIndex].classList.add('selected');
+        items[UI._acIndex].scrollIntoView({ block: 'nearest' });
+    },
+    
+    selectAutocomplete() {
+        const selected = UI.autocomplete.querySelector('.ac-item.selected');
+        if (selected) {
+            UI.input.value = selected.dataset.cmd + ' ';
+        }
+        UI.hideAutocomplete();
+        UI.input.focus();
+    },
+    
+    hideAutocomplete() {
+        UI._acVisible = false;
+        UI._acIndex = -1;
+        UI.autocomplete.classList.remove('visible');
+    },
+    
+    // === QUICK ACTIONS ===
+    updateQuickActions() {
+        const btns = [];
+        
+        if (!SM.active()) {
+            btns.push({ label: 'ENTER', cmd: 'enter ', primary: true });
+            btns.push({ label: 'HISTORY', cmd: 'history' });
+        } else {
+            // Always show TASK - can add multiple
+            btns.push({ label: 'TASK', cmd: 'task ', primary: !SM.hasTask() });
+            
+            if (SM.hasTask()) {
+                btns.push({ label: 'DONE', cmd: 'done', primary: true });
+                btns.push({ label: 'FAIL', cmd: 'fail ' });
+                if (SM.taskCount() > 1) {
+                    btns.push({ label: 'TASKS', cmd: 'tasks' });
+                }
+            }
+            
+            btns.push({ label: 'DECIDE', cmd: 'decide ' });
+            btns.push({ label: 'EXIT', cmd: 'exit', warn: true });
+        }
+        
+        UI.quickActions.innerHTML = btns.map(b => {
+            const cls = `quick-btn${b.primary ? ' primary' : ''}${b.warn ? ' warn' : ''}`;
+            return `<button class="${cls}" data-cmd="${b.cmd}">${b.label}</button>`;
+        }).join('');
+        
+        UI.quickActions.querySelectorAll('.quick-btn').forEach(el => {
+            el.addEventListener('click', () => {
+                const cmd = el.dataset.cmd;
+                if (cmd.endsWith(' ')) {
+                    UI.input.value = cmd;
+                    UI.input.focus();
+                } else {
+                    UI.exec(cmd);
+                }
+            });
+        });
+    },
+    
+    // === HUD ===
+    updateHUD() {
+        if (!SM.active()) {
+            UI.hud.classList.remove('visible');
+            UI.terminal.classList.remove('with-hud');
+            return;
+        }
+        
+        UI.hud.classList.add('visible');
+        UI.terminal.classList.add('with-hud');
+        
+        const st = SM.status();
+        
+        // Session
+        const sessionEl = $('hudSession');
+        sessionEl.querySelector('span').textContent = `${st.session.intent.slice(0, 15)}${st.session.intent.length > 15 ? '..' : ''} (${st.duration})`;
+        
+        // Tasks (show focus task)
+        const taskEl = $('hudTask');
+        if (st.taskCount > 0) {
+            const focusTask = st.focusTask || st.activeTasks[st.activeTasks.length - 1];
+            const label = st.taskCount > 1 
+                ? `${st.taskCount} active ${focusTask.shortId}` 
+                : `${focusTask.label.slice(0, 15)}${focusTask.label.length > 15 ? '..' : ''} ${focusTask.shortId}`;
+            taskEl.querySelector('span').textContent = label;
+        } else {
+            taskEl.querySelector('span').textContent = '—';
+        }
+        
+        // Load
+        const loadEl = $('hudLoad');
+        loadEl.querySelector('span').textContent = `${st.load.level} ${st.load.score}`;
+        loadEl.className = 'hud-item';
+        if (st.load.level === 'HIGH') loadEl.classList.add('warn');
+        if (st.load.level === 'CRITICAL') loadEl.classList.add('err');
+        
+        // Load warnings with cooldown (10 min = 600000ms)
+        const now = Date.now();
+        const cooldown = 600000;
+        const levelOrder = { 'LOW': 0, 'MED': 1, 'HIGH': 2, 'CRITICAL': 3 };
+        const currentLevel = levelOrder[st.load.level] || 0;
+        const lastLevel = levelOrder[UI._lastLoadWarn] || 0;
+        
+        // Only warn on increase to HIGH or CRITICAL, with cooldown
+        if (currentLevel >= 2 && currentLevel > lastLevel) {
+            if (now - UI._lastLoadWarnTime > cooldown) {
+                if (st.load.level === 'HIGH') UI.print('!! HIGH LOAD — consider wrapping up', 'warn');
+                if (st.load.level === 'CRITICAL') UI.print('!! CRITICAL LOAD — take a break', 'error');
+                UI._lastLoadWarnTime = now;
+            }
+        }
+        UI._lastLoadWarn = st.load.level;
+    },
+    
+    // === STATUS BAR ===
+    updateStatus() {
+        if (SM.active()) {
+            UI.status.textContent = 'ACTIVE';
+            UI.status.classList.add('active');
+        } else {
+            UI.status.textContent = 'IDLE';
+            UI.status.classList.remove('active');
+        }
+    },
+    
+    updatePlaceholder() {
+        if (!SM.active()) {
+            UI.input.placeholder = 'enter <intent> | history | help';
+        } else if (!SM.hasTask()) {
+            UI.input.placeholder = 'task <desc> | decide | exit';
+        } else {
+            UI.input.placeholder = 'done [id] | fail [id] | task | tasks';
+        }
+    },
+    
+    updateAll() {
+        UI.updateStatus();
+        UI.updateHUD();
+        UI.updateQuickActions();
+        UI.updatePlaceholder();
+        UI.hideAutocomplete();
+    },
+    
+    // Check if user is near bottom of page (within threshold)
+    isNearBottom(threshold = 100) {
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const windowHeight = window.innerHeight;
+        const docHeight = document.documentElement.scrollHeight;
+        return (docHeight - scrollTop - windowHeight) < threshold;
+    },
+    
+    print(text, cls = '') {
+        const wasNearBottom = UI.isNearBottom(100);
+        const div = document.createElement('div');
+        div.className = `line ${cls}`;
+        div.textContent = text;
+        UI.output.appendChild(div);
+        // Only autoscroll if user was near bottom
+        if (wasNearBottom) {
+            window.scrollTo(0, document.body.scrollHeight);
+        }
+    },
+    
+    exec(input) {
+        UI.print(`> ${input}`, 'dim');
+        
+        // Check tutorial progress
+        Tutorial.check(input);
+        
+        const parts = input.trim().split(/\s+/);
+        const cmd = parts[0].toLowerCase();
+        const args = parts.slice(1).join(' ');
+        
+        try {
+            UI.handle(cmd, args);
+        } catch (e) {
+            UI.print(typeof e === 'string' ? e : e.message, 'error');
+        }
+        
+        UI.updateAll();
+    },
+    
+    handle(cmd, args) {
+        const aliases = {
+            e: 'enter', start: 'enter', begin: 'enter',
+            x: 'exit', end: 'exit', quit: 'exit',
+            t: 'task', add: 'task',
+            d: 'done', complete: 'done', finish: 'done',
+            f: 'fail',
+            dec: 'decide',
+            s: 'status', st: 'status',
+            ts: 'tasks',
+            decs: 'decisions',
+            l: 'load',
+            h: 'history', hist: 'history', ls: 'history',
+            r: 'report', view: 'report', show: 'report',
+            '?': 'help',
+            cls: 'clear',
+            cfg: 'config'
+        };
+        
+        const c = aliases[cmd] || cmd;
+        
+        switch (c) {
+            case 'enter': {
+                const s = SM.enter(args);
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                UI.print('| >> SESSION STARTED                         |', 'bright');
+                UI.print('+--------------------------------------------+', 'bright');
+                UI.print(`| ${s.intent.slice(0,42).padEnd(42)} |`, 'info');
+                UI.print('+============================================+', 'bright');
+                break;
+            }
+            
+            case 'exit': {
+                const parts = args.split(/\s+/);
+                const outcomes = ['completed', 'aborted', 'timeout'];
+                let outcome = 'COMPLETED', summary = args;
+                if (parts[0] && outcomes.includes(parts[0].toLowerCase())) {
+                    outcome = parts.shift().toUpperCase();
+                    summary = parts.join(' ');
+                }
+                const r = SM.exit(outcome, summary);
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                UI.print('| ## SESSION ENDED                           |', 'bright');
+                UI.print('+--------------------------------------------+', 'bright');
+                UI.print(`| Duration: ${r.duration.padEnd(32)} |`);
+                UI.print(`| Tasks: ${r.stats.completed} done, ${r.stats.failed} failed`.padEnd(43) + ' |');
+                UI.print(`| Load: ${r.load.level} (${r.load.score}/100)`.padEnd(43) + ' |');
+                UI.print('+============================================+', 'bright');
+                break;
+            }
+            
+            case 'task': {
+                const t = SM.task(args);
+                const label = t.label.length > 34 ? t.label.slice(0, 34) + '..' : t.label;
+                UI.print('');
+                UI.print('+============================================+', 'info');
+                UI.print(`| * ${t.shortId} ${label.padEnd(34)} |`, 'info');
+                UI.print('+============================================+', 'info');
+                if (t.total > 1) UI.print(`  ${t.total} tasks active`, 'dim');
+                break;
+            }
+            
+            case 'done': {
+                const t = SM.done(args || null);
+                const label = t.label.length > 34 ? t.label.slice(0, 34) + '..' : t.label;
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                UI.print(`| + COMPLETED ${t.shortId}`.padEnd(43) + ' |', 'bright');
+                UI.print('+--------------------------------------------+', 'bright');
+                UI.print(`| ${label.padEnd(42)} |`);
+                UI.print(`| Duration: ${t.duration.padEnd(32)} |`, 'dim');
+                UI.print('+============================================+', 'bright');
+                if (t.remaining > 0) UI.print(`  ${t.remaining} task(s) remaining`, 'dim');
+                break;
+            }
+            
+            case 'fail': {
+                const t = SM.fail(args);
+                const label = t.label.length > 34 ? t.label.slice(0, 34) + '..' : t.label;
+                UI.print('');
+                UI.print('+============================================+', 'error');
+                UI.print(`| x FAILED ${t.shortId}`.padEnd(43) + ' |', 'error');
+                UI.print('+--------------------------------------------+', 'error');
+                UI.print(`| ${label.padEnd(42)} |`);
+                UI.print('+============================================+', 'error');
+                if (t.remaining > 0) UI.print(`  ${t.remaining} task(s) remaining`, 'dim');
+                break;
+            }
+            
+            case 'drop': {
+                const t = SM.drop(args || null);
+                const label = t.label.length > 34 ? t.label.slice(0, 34) + '..' : t.label;
+                UI.print('');
+                UI.print('+============================================+', 'warn');
+                UI.print(`| - DROPPED ${t.shortId}`.padEnd(43) + ' |', 'warn');
+                UI.print('+--------------------------------------------+', 'warn');
+                UI.print(`| ${label.padEnd(42)} |`);
+                UI.print('+============================================+', 'warn');
+                if (t.remaining > 0) UI.print(`  ${t.remaining} task(s) remaining`, 'dim');
+                break;
+            }
+            
+            case 'focus': {
+                if (!SM.session) throw 'ERR: No active session.';
+                if (!SM.hasTask()) throw 'ERR: No active tasks.';
+                
+                if (!args) {
+                    // Show current focus task
+                    const ft = SM.getFocusTask();
+                    if (ft) {
+                        const dur = Math.round((Date.now() - new Date(ft.startedAt)) / 60000);
+                        UI.print('');
+                        UI.print('+============================================+', 'bright');
+                        UI.print('| >> FOCUS TASK                              |', 'bright');
+                        UI.print('+--------------------------------------------+', 'bright');
+                        UI.print(`| ${SM.shortId(ft.id)} ${ft.label.slice(0,34).padEnd(34)} |`, 'info');
+                        UI.print(`| Duration: ${dur}m`.padEnd(43) + ' |', 'dim');
+                        UI.print('+============================================+', 'bright');
+                    }
+                } else {
+                    // Set focus task
+                    const t = SM.setFocus(args);
+                    UI.print(`Focus set to: ${t.shortId} ${t.label.slice(0,30)}`, 'info');
+                }
+                break;
+            }
+            
+            case 'decide': {
+                const d = SM.decide(args);
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                UI.print('| DECISION                                   |', 'bright');
+                UI.print('+--------------------------------------------+', 'bright');
+                UI.print(`| ${d.choice.slice(0,42).padEnd(42)} |`, 'info');
+                UI.print('+--------------------------------------------+', 'dim');
+                UI.print(`| Reason: ${d.reason.slice(0,34).padEnd(34)} |`, 'dim');
+                UI.print('+============================================+', 'dim');
+                break;
+            }
+            
+            case 'status': {
+                const st = SM.status();
+                if (!st) { UI.print('No active session.', 'dim'); break; }
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                UI.print('| ** CURRENT SESSION                         |', 'bright');
+                UI.print('+--------------------------------------------+', 'bright');
+                UI.print(`| Intent: ${st.session.intent.slice(0,34).padEnd(34)} |`);
+                UI.print(`| Duration: ${st.duration.padEnd(32)} |`);
+                UI.print(`| Tasks: ${st.stats.completed} done, ${st.stats.failed} failed`.padEnd(43) + ' |');
+                UI.print(`| Load: ${st.load.level} (${st.load.score}/100)`.padEnd(43) + ' |');
+                UI.print('+--------------------------------------------+', 'info');
+                if (st.taskCount > 0) {
+                    UI.print(`| Active Tasks: ${st.taskCount}`.padEnd(43) + ' |', 'info');
+                    st.activeTasks.forEach(t => {
+                        UI.print(`|   * ${t.shortId} ${t.label.slice(0,30).padEnd(30)} |`, 'info');
+                    });
+                } else {
+                    UI.print('| No active tasks                            |', 'dim');
+                }
+                UI.print('+============================================+', 'bright');
+                break;
+            }
+            
+            case 'tasks': {
+                const ts = SM.getTasks();
+                if (ts.length === 0) { UI.print('No tasks in session.', 'dim'); break; }
+                
+                const active = ts.filter(t => t.status === 'ACTIVE');
+                const finished = ts.filter(t => t.status !== 'ACTIVE');
+                const focusId = SM.focusTaskId;
+                
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                UI.print(`| ## TASKS (${ts.length})`.padEnd(43) + ' |', 'bright');
+                UI.print('+--------------------------------------------+', 'bright');
+                
+                if (active.length > 0) {
+                    UI.print('| -- Active --                               |', 'info');
+                    active.forEach(t => {
+                        const dur = Math.round((Date.now() - new Date(t.startedAt)) / 60000);
+                        const isFocus = t.id === focusId;
+                        const marker = isFocus ? '>' : '*';
+                        const label = t.label.slice(0, isFocus ? 24 : 26);
+                        const focusTag = isFocus ? ' F' : '';
+                        UI.print(`| ${marker} ${SM.shortId(t.id)} ${label.padEnd(isFocus ? 24 : 26)}${focusTag} ${String(dur).padStart(4)}m |`, isFocus ? 'bright' : 'info');
+                    });
+                }
+                
+                if (finished.length > 0) {
+                    UI.print('| -- Completed --                            |', 'dim');
+                    finished.forEach(t => {
+                        const icon = t.status === 'DONE' ? '+' : t.status === 'FAIL' ? 'x' : '-';
+                        const dur = t.durationMin !== undefined ? `${t.durationMin}m` : '--';
+                        const label = t.label.slice(0, 26);
+                        const cls = t.status === 'FAIL' ? 'error' : t.status === 'DROP' ? 'warn' : 'dim';
+                        UI.print(`| ${icon} ${SM.shortId(t.id)} ${label.padEnd(26)} ${dur.padStart(4)} |`, cls);
+                    });
+                }
+                
+                UI.print('+============================================+', 'bright');
+                break;
+            }
+            
+            case 'decisions': {
+                const ds = SM.getDecisions();
+                if (ds.length === 0) { UI.print('No decisions recorded.', 'dim'); break; }
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                UI.print(`| ## DECISIONS (${ds.length})`.padEnd(43) + ' |', 'bright');
+                UI.print('+--------------------------------------------+', 'bright');
+                ds.forEach(d => {
+                    const time = new Date(d.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+                    UI.print(`| [${time}] ${d.choice.slice(0,34).padEnd(34)} |`);
+                });
+                UI.print('+============================================+', 'bright');
+                break;
+            }
+            
+            case 'load': {
+                const st = SM.status();
+                if (!st) { UI.print('No active session.', 'dim'); break; }
+                const l = st.load;
+                const cls = l.level === 'CRITICAL' ? 'error' : l.level === 'HIGH' ? 'warn' : 'bright';
+                
+                const width = 24;
+                const filled = Math.round((l.score / 100) * width);
+                const bar = '#'.repeat(filled) + '-'.repeat(width - filled);
+                
+                UI.print('');
+                UI.print('+============================================+', cls);
+                UI.print('| ## COGNITIVE LOAD                          |', cls);
+                UI.print('+--------------------------------------------+', cls);
+                UI.print(`| [${bar}] ${String(l.score).padStart(3)}%          |`, cls);
+                UI.print(`| Level: ${l.level.padEnd(34)} |`, cls);
+                UI.print('+--------------------------------------------+', cls);
+                UI.print(`| Duration factor: ${String(l.factors.duration.penalty).padStart(2)}pts`.padEnd(43) + ' |', 'dim');
+                UI.print(`| Task switches:   ${String(l.factors.switchRate.penalty).padStart(2)}pts`.padEnd(43) + ' |', 'dim');
+                UI.print(`| Error rate:      ${String(l.factors.errors.penalty).padStart(2)}pts`.padEnd(43) + ' |', 'dim');
+                UI.print('+============================================+', cls);
+                break;
+            }
+            
+            case 'history': {
+                const arg = args.trim();
+                
+                // history <n> - open report for n-th session from last history
+                if (arg && /^\d+$/.test(arg)) {
+                    const idx = parseInt(arg) - 1;
+                    if (UI._lastHistorySessions.length === 0) {
+                        // No cached history, get sessions first
+                        UI._lastHistorySessions = SM.getSessions().slice(0, 10);
+                    }
+                    if (idx < 0 || idx >= UI._lastHistorySessions.length) {
+                        throw `OUT OF RANGE: 1-${UI._lastHistorySessions.length}`;
+                    }
+                    const s = UI._lastHistorySessions[idx];
+                    // Show report for this session
+                    UI.handle('report', s.id);
+                    break;
+                }
+                
+                // history [count] - show list
+                const n = parseInt(arg) || 10;
+                const sessions = SM.getSessions().slice(0, n);
+                UI._lastHistorySessions = sessions; // Cache for quick access
+                
+                if (sessions.length === 0) { UI.print('No session history.', 'dim'); break; }
+                
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                UI.print(`| >> SESSION HISTORY (${sessions.length})`.padEnd(43) + ' |', 'bright');
+                UI.print('+--------------------------------------------+', 'bright');
+                UI.print('| #   ID     DATE     DUR   LOAD  INTENT     |', 'dim');
+                UI.print('+--------------------------------------------+', 'dim');
+                
+                sessions.forEach((s, i) => {
+                    const num = String(i + 1).padStart(2);
+                    const shortId = s.id.slice(-4);
+                    const date = new Date(s.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    const intent = s.intent.slice(0, 10);
+                    const cls = s.load.level === 'HIGH' || s.load.level === 'CRITICAL' ? 'warn' : '';
+                    UI.print(`| ${num} ${shortId} ${date.padEnd(6)} ${s.duration.padEnd(4)} ${s.load.level.padEnd(5)} ${intent.padEnd(10)} |`, cls);
+                });
+                
+                UI.print('+============================================+', 'bright');
+                UI.print('  history <#> to view report', 'hint');
+                break;
+            }
+            
+            case 'report': {
+                let s = null;
+                let isActive = false;
+                
+                if (!args) {
+                    // Smart default: last completed session, or active if no completed
+                    const sessions = SM.getSessions();
+                    if (sessions.length > 0) {
+                        s = sessions[0]; // Most recent completed
+                    } else if (SM.active()) {
+                        isActive = true;
+                    } else {
+                        throw 'NO SESSIONS';
+                    }
+                } else if (args.toLowerCase() === 'active') {
+                    // Report for active session
+                    if (!SM.active()) throw 'NO ACTIVE SESSION';
+                    isActive = true;
+                } else {
+                    // Find by ID
+                    s = SM.getSession(args);
+                    if (!s) throw `Session not found: ${args}`;
+                }
+                
+                // Build report data
+                let reportData;
+                if (isActive) {
+                    const st = SM.status();
+                    const tasks = SM.getTasks();
+                    const decisions = SM.getDecisions();
+                    reportData = {
+                        intent: st.session.intent,
+                        duration: st.duration,
+                        outcome: 'IN PROGRESS',
+                        load: st.load,
+                        stats: st.stats,
+                        tasks: tasks,
+                        decisions: decisions,
+                        isActive: true
+                    };
+                } else {
+                    const tasks = SM.getSessionTasks(s.id);
+                    const decisions = SM.getDecisions(s.id);
+                    reportData = {
+                        intent: s.intent,
+                        duration: s.duration,
+                        outcome: s.outcome,
+                        load: s.load,
+                        stats: s.stats,
+                        tasks: tasks,
+                        decisions: decisions,
+                        isActive: false
+                    };
+                }
+                
+                const l = reportData.load;
+                const loadCls = l.level === 'CRITICAL' ? 'error' : l.level === 'HIGH' ? 'warn' : 'bright';
+                const outcomeCls = reportData.outcome === 'COMPLETED' ? 'bright' : reportData.isActive ? 'info' : 'warn';
+                
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                UI.print(`| ** SESSION REPORT${reportData.isActive ? ' (ACTIVE)' : ''}`.padEnd(43) + ' |', 'bright');
+                UI.print('+--------------------------------------------+', 'bright');
+                UI.print(`| ${reportData.intent.slice(0,42).padEnd(42)} |`, 'info');
+                UI.print('+--------------------------------------------+', 'bright');
+                UI.print(`| Duration: ${reportData.duration.padEnd(32)} |`);
+                UI.print(`| Outcome:  ${reportData.outcome.padEnd(32)} |`, outcomeCls);
+                UI.print(`| Load:     ${l.level} (${l.score}/100)`.padEnd(43) + ' |', loadCls);
+                UI.print(`| Tasks:    ${reportData.stats.completed} done, ${reportData.stats.failed} failed`.padEnd(43) + ' |');
+                
+                if (reportData.tasks.length > 0) {
+                    UI.print('+--------------------------------------------+', 'bright');
+                    UI.print('| ## Tasks                                   |', 'bright');
+                    reportData.tasks.forEach(t => {
+                        const icon = t.status === 'DONE' ? '+' : t.status === 'FAIL' ? 'x' : t.status === 'ACTIVE' ? '*' : '-';
+                        const dur = t.durationMin !== undefined ? `${t.durationMin}m` : '--';
+                        const label = t.label.slice(0, 30);
+                        const cls = t.status === 'DONE' ? 'bright' : t.status === 'FAIL' ? 'error' : t.status === 'ACTIVE' ? 'info' : 'warn';
+                        UI.print(`| ${icon} ${label.padEnd(30)} ${dur.padStart(6)} |`, cls);
+                    });
+                }
+                
+                if (reportData.decisions.length > 0) {
+                    UI.print('+--------------------------------------------+', 'bright');
+                    UI.print('| ## Decisions                               |', 'bright');
+                    reportData.decisions.forEach(d => {
+                        const time = new Date(d.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+                        UI.print(`| ${time} ${d.choice.slice(0,36).padEnd(36)} |`, 'info');
+                        if (d.reason) {
+                            UI.print(`|      >> ${d.reason.slice(0,33).padEnd(33)} |`, 'dim');
+                        }
+                    });
+                }
+                
+                UI.print('+============================================+', 'bright');
+                break;
+            }
+            
+            case 'export': {
+                const fmt = args.toLowerCase() || 'json';
+                if (fmt === 'json') UI.print(Export.json(), 'bright');
+                else if (fmt === 'csv') UI.print(Export.csv(), 'bright');
+                else throw 'ERR: Use: export json | export csv';
+                break;
+            }
+            
+            case 'config': {
+                const cfg = S.config();
+                if (!args) {
+                    UI.print('CONFIG', 'bright');
+                    UI.print(`safeWindowMinutes: ${cfg.safeWindowMinutes || 90}`);
+                    UI.print(`scanlines: ${cfg.scanlines !== false ? 'on' : 'off'}`);
+                    UI.print('');
+                    UI.print('Use: config <key> <value>', 'hint');
+                } else {
+                    const [key, ...vals] = args.split(/\s+/);
+                    const val = vals.join(' ');
+                    if (key === 'safeWindowMinutes') {
+                        const n = parseInt(val);
+                        if (!n || n < 1) throw 'ERR: Must be positive integer.';
+                        cfg.safeWindowMinutes = n;
+                        S.set('config', cfg);
+                        UI.print(`safeWindowMinutes = ${n}`, 'bright');
+                    } else {
+                        throw `ERR: Unknown key: ${key}`;
+                    }
+                }
+                break;
+            }
+            
+            case 'scanlines': {
+                const cfg = S.config();
+                const arg = args.toLowerCase().trim();
+                if (arg === 'on' || arg === '1' || arg === 'true') {
+                    cfg.scanlines = true;
+                    S.set('config', cfg);
+                    document.body.classList.remove('no-scanlines');
+                    UI.print('Scanlines: ON', 'bright');
+                } else if (arg === 'off' || arg === '0' || arg === 'false') {
+                    cfg.scanlines = false;
+                    S.set('config', cfg);
+                    document.body.classList.add('no-scanlines');
+                    UI.print('Scanlines: OFF', 'dim');
+                } else {
+                    UI.print(`Scanlines: ${cfg.scanlines !== false ? 'ON' : 'OFF'}`);
+                    UI.print('Use: scanlines on|off', 'hint');
+                }
+                break;
+            }
+            
+            case 'clear':
+                UI.output.innerHTML = '';
+                break;
+                break;
+            
+            case 'tutorial':
+                if (args === 'start' && Tutorial.active && Tutorial.step === 0) {
+                    Tutorial.step = 1;
+                    Tutorial.showStep();
+                } else if (args === 'reset') {
+                    Tutorial.reset();
+                    UI.print('Tutorial reset. Type "tutorial" to start again.', 'bright');
+                } else if (!Tutorial.active) {
+                    Tutorial.start();
+                } else {
+                    UI.print('Tutorial in progress. Follow the instructions above.', 'dim');
+                    const s = Tutorial.steps[Tutorial.step];
+                    if (s && s.hint) UI.print(`  Try: ${s.hint}`, 'info');
+                }
+                break;
+            
+            case 'reset':
+                if (args !== 'confirm') {
+                    UI.print('This will DELETE ALL DATA.', 'warn');
+                    UI.print('Type: reset confirm', 'warn');
+                } else {
+                    for (let i = localStorage.length - 1; i >= 0; i--) {
+                        const k = localStorage.key(i);
+                        if (k && k.startsWith('osc_')) localStorage.removeItem(k);
+                    }
+                    location.reload();
+                }
+                break;
+            
+            case 'help':
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                UI.print('|       OSC — OPERATOR SESSION CONSOLE       |', 'bright');
+                UI.print('+============================================+', 'bright');
+                UI.print('');
+                UI.print('SESSION', 'bright');
+                UI.print('  enter <intent>        Start session');
+                UI.print('  exit [outcome]        End session');
+                UI.print('  status                Current status');
+                UI.print('');
+                UI.print('TASKS', 'bright');
+                UI.print('  task <description>    Start task (focus)');
+                UI.print('  done [id]             Complete (focus)');
+                UI.print('  fail [id] [reason]    Mark failed');
+                UI.print('  drop [id]             Abandon task');
+                UI.print('  focus [id]            Set/show focus');
+                UI.print('  tasks                 List all');
+                UI.print('');
+                UI.print('DECISIONS', 'bright');
+                UI.print('  decide <X> :: <Y>     Log decision');
+                UI.print('  decisions             List all');
+                UI.print('');
+                UI.print('MONITORING', 'bright');
+                UI.print('  load                  Cognitive load');
+                UI.print('  history               Sessions list (#)');
+                UI.print('  history <#>           View report by #');
+                UI.print('  report                Last session');
+                UI.print('  report active         Current session');
+                UI.print('  report <id>           By session ID');
+                UI.print('');
+                UI.print('DATA', 'bright');
+                UI.print('  export json|csv       Export data');
+                UI.print('  config                Settings');
+                UI.print('  scanlines on|off      CRT effect');
+                UI.print('  reset confirm         Delete all');
+                UI.print('');
+                UI.print('OTHER', 'bright');
+                UI.print('  tutorial              Interactive guide');
+                UI.print('  help                  This reference');
+                UI.print('  clear                 Clear screen');
+                UI.print('');
+                UI.print('TIPS', 'bright');
+                UI.print('  Tab/tap >  Autocomplete');
+                UI.print('  ↑/↓        Command history');
+                UI.print('');
+                UI.print('+============================================+', 'bright');
+                break;
+            
+            default:
+                throw `ERR: Unknown: "${cmd}". Type "help" or press Tab.`;
+        }
+    }
+};
+
+// ===========================================================================
+// INIT
+// ===========================================================================
+
+document.addEventListener('DOMContentLoaded', () => UI.init());
+</script>
+</body>
+</html>
