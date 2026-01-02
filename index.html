@@ -179,7 +179,7 @@
 // OSC — OPERATOR SESSION CONSOLE
 // ===========================================================================
 
-const APP_VERSION = '5.0';
+const APP_VERSION = '5.1';
 
 const $ = id => document.getElementById(id);
 const S = {
@@ -187,7 +187,11 @@ const S = {
     set: (k, v) => localStorage.setItem('osc_' + k, JSON.stringify(v)),
     events: () => S.get('events') || [],
     append: e => { const ev = S.events(); ev.push(e); S.set('events', ev); return e; },
-    config: () => S.get('config') || { safeWindowMinutes: 90 }
+    config: () => S.get('config') || { safeWindowMinutes: 90, planKeep: false },
+    plan: () => S.get('plan') || [],
+    setPlan: p => S.set('plan', p),
+    lastCmd: () => S.get('lastCmd') || '',
+    setLastCmd: c => S.set('lastCmd', c)
 };
 
 // ===========================================================================
@@ -241,19 +245,32 @@ const Cog = {
 };
 
 // ===========================================================================
-// SESSION MANAGER (Multi-task support)
+// SESSION MANAGER (Numeric task IDs, Plan support)
 // ===========================================================================
 
 const SM = {
     session: null,
-    tasks: new Map(),  // Multiple active tasks
-    focusTaskId: null, // Current focus task
+    tasks: new Map(),      // taskNum -> task object
+    focusTaskNum: null,    // Current focus task (numeric)
+    nextTaskNum: 1,        // Session-scoped task counter
     
     genId: p => `${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
-    shortId: id => id ? id.slice(-4) : '0000',
     
     emit(type, sid, payload = {}) {
         return S.append({ id: SM.genId('evt'), type, sessionId: sid, timestamp: new Date().toISOString(), payload });
+    },
+    
+    // Map legacy task IDs to numeric within session events
+    buildTaskNumMap(sessionEvents) {
+        const map = new Map();
+        let num = 1;
+        sessionEvents.filter(e => e.type === 'TASK_STARTED').forEach(e => {
+            // If taskNum exists use it, otherwise assign sequential
+            const taskNum = e.payload.taskNum || num;
+            map.set(e.payload.taskId, taskNum);
+            num = Math.max(num, taskNum) + 1;
+        });
+        return map;
     },
     
     restore() {
@@ -266,17 +283,30 @@ const SM = {
         if (open) {
             SM.session = { id: open.sessionId, intent: open.payload.intent, startedAt: open.timestamp };
             SM.tasks.clear();
-            SM.focusTaskId = null;
+            SM.focusTaskNum = null;
+            SM.nextTaskNum = 1;
+            
             const se = ev.filter(e => e.sessionId === SM.session.id);
+            const taskNumMap = SM.buildTaskNumMap(se);
             
             // Restore all active tasks
             const taskEnds = se.filter(e => ['TASK_COMPLETED', 'TASK_FAILED', 'TASK_ABANDONED'].includes(e.type));
             const endedTaskIds = new Set(taskEnds.map(e => e.payload.taskId));
             
             se.filter(e => e.type === 'TASK_STARTED').forEach(e => {
+                const taskNum = taskNumMap.get(e.payload.taskId) || SM.nextTaskNum++;
+                SM.nextTaskNum = Math.max(SM.nextTaskNum, taskNum + 1);
+                
                 if (!endedTaskIds.has(e.payload.taskId)) {
-                    SM.tasks.set(e.payload.taskId, { id: e.payload.taskId, label: e.payload.label, startedAt: e.timestamp });
-                    SM.focusTaskId = e.payload.taskId; // Last active task becomes focus
+                    const task = { 
+                        num: taskNum,
+                        id: e.payload.taskId, 
+                        label: e.payload.label, 
+                        startedAt: e.timestamp,
+                        planned: e.payload.planned || false
+                    };
+                    SM.tasks.set(taskNum, task);
+                    SM.focusTaskNum = taskNum;
                 }
             });
         }
@@ -286,149 +316,157 @@ const SM = {
     hasTask: () => SM.tasks.size > 0,
     taskCount: () => SM.tasks.size,
     
-    // Get focus task or find by ID
+    // Get focus task
     getFocusTask() {
-        if (SM.focusTaskId && SM.tasks.has(SM.focusTaskId)) {
-            return SM.tasks.get(SM.focusTaskId);
+        if (SM.focusTaskNum && SM.tasks.has(SM.focusTaskNum)) {
+            return SM.tasks.get(SM.focusTaskNum);
         }
-        // Fallback to last task if focus is invalid
-        const keys = Array.from(SM.tasks.keys());
-        return keys.length > 0 ? SM.tasks.get(keys[keys.length - 1]) : null;
+        // Fallback to highest numbered active task
+        const nums = Array.from(SM.tasks.keys()).sort((a,b) => b - a);
+        return nums.length > 0 ? SM.tasks.get(nums[0]) : null;
     },
     
-    // Set focus task by ID hint
-    setFocus(idHint) {
-        const t = SM.findTaskById(idHint);
-        if (!t) throw `ERR: Task not found: ${idHint}`;
-        SM.focusTaskId = t.id;
-        return { ...t, shortId: SM.shortId(t.id) };
-    },
-    
-    // Find task by ID (not using focus)
-    findTaskById(idHint) {
-        if (!idHint) return null;
-        
-        // Strip brackets if user copied [id] format
-        let cleanId = idHint.replace(/[\[\]]/g, '').trim();
-        
-        // Try exact match first
-        if (SM.tasks.has(cleanId)) return SM.tasks.get(cleanId);
-        
-        // Try short ID match (last 4-6 chars)
-        for (const [id, task] of SM.tasks) {
-            const shortId = SM.shortId(id);
-            if (shortId === cleanId || id.endsWith(cleanId) || id.includes(cleanId)) {
-                return task;
-            }
+    // Set focus task by numeric ID
+    setFocus(numHint) {
+        const num = parseInt(numHint);
+        if (isNaN(num) || !SM.tasks.has(num)) {
+            throw `ERR: Task #${numHint} not found`;
         }
-        return null;
+        SM.focusTaskNum = num;
+        const t = SM.tasks.get(num);
+        return { ...t };
     },
     
-    // Get task by ID hint or return focus task
-    findTask(idHint) {
-        if (!idHint) {
-            // Return focus task
+    // Find task by numeric ID
+    findTaskByNum(numHint) {
+        if (!numHint) return null;
+        const num = parseInt(String(numHint).replace(/[#\[\]]/g, ''));
+        if (isNaN(num)) return null;
+        return SM.tasks.get(num) || null;
+    },
+    
+    // Get task by numeric ID or return focus task
+    findTask(numHint) {
+        if (!numHint) {
             return SM.getFocusTask();
         }
-        return SM.findTaskById(idHint);
+        return SM.findTaskByNum(numHint);
     },
     
-    enter(intent) {
+    enter(intent, importPlan = true) {
         if (SM.session) throw 'ERR: Session active. Use "exit" first.';
         if (!intent) throw 'ERR: Intent required. Usage: enter <intent>';
+        
         const sid = 's_' + Date.now();
         const e = SM.emit('SESSION_STARTED', sid, { intent });
         SM.session = { id: sid, intent, startedAt: e.timestamp };
         SM.tasks.clear();
-        SM.focusTaskId = null;
-        return SM.session;
+        SM.focusTaskNum = null;
+        SM.nextTaskNum = 1;
+        
+        // Import plan queue
+        const planQueue = S.plan();
+        let imported = 0;
+        if (importPlan && planQueue.length > 0) {
+            planQueue.forEach(item => {
+                SM.taskInternal(item.label, true); // planned=true
+                imported++;
+            });
+            // Clear plan unless planKeep is set
+            const cfg = S.config();
+            if (!cfg.planKeep) {
+                S.setPlan([]);
+            }
+        }
+        
+        return { ...SM.session, importedPlan: imported };
     },
     
     exit(outcome = 'COMPLETED', summary = '') {
         if (!SM.session) throw 'ERR: No active session.';
         // Abandon all remaining tasks
-        SM.tasks.forEach((t, tid) => SM.emit('TASK_ABANDONED', SM.session.id, { taskId: tid }));
+        SM.tasks.forEach((t) => SM.emit('TASK_ABANDONED', SM.session.id, { taskId: t.id, taskNum: t.num }));
         SM.emit('SESSION_ENDED', SM.session.id, { outcome, summary });
         const ev = S.events().filter(e => e.sessionId === SM.session.id);
         const load = Cog.calc(SM.session.startedAt, ev);
-        const stats = SM.stats(ev);
+        const stats = SM.statsFromEvents(ev);
         const dur = SM.fmtDur(SM.session.startedAt);
         const r = { ...SM.session, outcome, summary, duration: dur, stats, load, abandoned: SM.tasks.size };
         SM.session = null;
         SM.tasks.clear();
-        SM.focusTaskId = null;
+        SM.focusTaskNum = null;
+        SM.nextTaskNum = 1;
         return r;
+    },
+    
+    // Internal task creation with planned flag
+    taskInternal(label, planned = false) {
+        const tid = 't_' + Date.now() + '_' + Math.random().toString(36).slice(2,4);
+        const taskNum = SM.nextTaskNum++;
+        SM.emit('TASK_STARTED', SM.session.id, { taskId: tid, taskNum, label, planned });
+        const task = { num: taskNum, id: tid, label, startedAt: new Date().toISOString(), planned };
+        SM.tasks.set(taskNum, task);
+        SM.focusTaskNum = taskNum;
+        return task;
     },
     
     task(label) {
         if (!SM.session) throw 'ERR: No active session. Use "enter <intent>" first.';
         if (!label) throw 'ERR: Label required. Usage: task <description>';
-        const tid = 't_' + Date.now() + '_' + Math.random().toString(36).slice(2,4);
-        SM.emit('TASK_STARTED', SM.session.id, { taskId: tid, label });
-        const task = { id: tid, label, startedAt: new Date().toISOString() };
-        SM.tasks.set(tid, task);
-        SM.focusTaskId = tid; // New task becomes focus
-        return { ...task, shortId: SM.shortId(tid), total: SM.tasks.size, isFocus: true };
+        const task = SM.taskInternal(label, false);
+        return { ...task, total: SM.tasks.size, isFocus: true };
     },
     
-    done(idHint = null) {
+    done(numHint = null) {
         if (!SM.session) throw 'ERR: No active session.';
-        // Strip brackets if present
-        const cleanId = idHint ? idHint.replace(/[\[\]]/g, '').trim() : null;
-        const t = SM.findTask(cleanId);
-        if (!t) throw cleanId ? `ERR: Task not found: ${cleanId}` : 'ERR: No active tasks.';
-        SM.emit('TASK_COMPLETED', SM.session.id, { taskId: t.id });
-        SM.tasks.delete(t.id);
-        // Update focus if completed task was focus
-        if (SM.focusTaskId === t.id) {
-            const keys = Array.from(SM.tasks.keys());
-            SM.focusTaskId = keys.length > 0 ? keys[keys.length - 1] : null;
+        const t = SM.findTask(numHint);
+        if (!t) throw numHint ? `ERR: Task #${numHint} not found` : 'ERR: No active tasks.';
+        SM.emit('TASK_COMPLETED', SM.session.id, { taskId: t.id, taskNum: t.num });
+        SM.tasks.delete(t.num);
+        // Update focus
+        if (SM.focusTaskNum === t.num) {
+            const nums = Array.from(SM.tasks.keys()).sort((a,b) => b - a);
+            SM.focusTaskNum = nums.length > 0 ? nums[0] : null;
         }
-        return { ...t, shortId: SM.shortId(t.id), duration: SM.fmtDur(t.startedAt), remaining: SM.tasks.size };
+        return { ...t, duration: SM.fmtDur(t.startedAt), remaining: SM.tasks.size };
     },
     
     fail(args = '') {
         if (!SM.session) throw 'ERR: No active session.';
-        // Parse: fail [id] [reason] or fail [reason]
         const parts = args.trim().split(/\s+/);
-        let idHint = null, reason = args;
+        let numHint = null, reason = args;
         
-        // Check if first word looks like an ID (strip brackets first)
-        if (parts[0]) {
-            const cleaned = parts[0].replace(/[\[\]]/g, '');
-            if (/^[a-z0-9_]{2,6}$/i.test(cleaned) && SM.findTaskById(cleaned)) {
-                idHint = cleaned;
-                parts.shift();
-                reason = parts.join(' ');
-            }
+        // Check if first word is numeric
+        if (parts[0] && /^\d+$/.test(parts[0])) {
+            numHint = parts[0];
+            parts.shift();
+            reason = parts.join(' ');
         }
         
-        const t = SM.findTask(idHint);
-        if (!t) throw idHint ? `ERR: Task not found: ${idHint}` : 'ERR: No active tasks.';
-        SM.emit('TASK_FAILED', SM.session.id, { taskId: t.id, reason });
-        SM.tasks.delete(t.id);
-        // Update focus if failed task was focus
-        if (SM.focusTaskId === t.id) {
-            const keys = Array.from(SM.tasks.keys());
-            SM.focusTaskId = keys.length > 0 ? keys[keys.length - 1] : null;
+        const t = SM.findTask(numHint);
+        if (!t) throw numHint ? `ERR: Task #${numHint} not found` : 'ERR: No active tasks.';
+        SM.emit('TASK_FAILED', SM.session.id, { taskId: t.id, taskNum: t.num, reason });
+        SM.tasks.delete(t.num);
+        // Update focus
+        if (SM.focusTaskNum === t.num) {
+            const nums = Array.from(SM.tasks.keys()).sort((a,b) => b - a);
+            SM.focusTaskNum = nums.length > 0 ? nums[0] : null;
         }
-        return { ...t, shortId: SM.shortId(t.id), reason, remaining: SM.tasks.size };
+        return { ...t, reason, remaining: SM.tasks.size };
     },
     
-    drop(idHint = null) {
+    drop(numHint = null) {
         if (!SM.session) throw 'ERR: No active session.';
-        // Strip brackets if present
-        const cleanId = idHint ? idHint.replace(/[\[\]]/g, '').trim() : null;
-        const t = SM.findTask(cleanId);
-        if (!t) throw cleanId ? `ERR: Task not found: ${cleanId}` : 'ERR: No active tasks.';
-        SM.emit('TASK_ABANDONED', SM.session.id, { taskId: t.id });
-        SM.tasks.delete(t.id);
-        // Update focus if dropped task was focus
-        if (SM.focusTaskId === t.id) {
-            const keys = Array.from(SM.tasks.keys());
-            SM.focusTaskId = keys.length > 0 ? keys[keys.length - 1] : null;
+        const t = SM.findTask(numHint);
+        if (!t) throw numHint ? `ERR: Task #${numHint} not found` : 'ERR: No active tasks.';
+        SM.emit('TASK_ABANDONED', SM.session.id, { taskId: t.id, taskNum: t.num });
+        SM.tasks.delete(t.num);
+        // Update focus
+        if (SM.focusTaskNum === t.num) {
+            const nums = Array.from(SM.tasks.keys()).sort((a,b) => b - a);
+            SM.focusTaskNum = nums.length > 0 ? nums[0] : null;
         }
-        return { ...t, shortId: SM.shortId(t.id), remaining: SM.tasks.size };
+        return { ...t, remaining: SM.tasks.size };
     },
     
     decide(input) {
@@ -453,12 +491,11 @@ const SM = {
             duration: SM.fmtDur(SM.session.startedAt),
             activeTasks: Array.from(SM.tasks.values()).map(t => ({ 
                 ...t, 
-                shortId: SM.shortId(t.id),
-                isFocus: t.id === SM.focusTaskId
+                isFocus: t.num === SM.focusTaskNum
             })),
-            focusTask: focusTask ? { ...focusTask, shortId: SM.shortId(focusTask.id) } : null,
+            focusTask: focusTask ? { ...focusTask } : null,
             taskCount: SM.tasks.size,
-            stats: SM.stats(ev),
+            stats: SM.statsFromEvents(ev),
             load: Cog.calc(SM.session.startedAt, ev)
         };
     },
@@ -466,9 +503,20 @@ const SM = {
     getTasks() {
         if (!SM.session) return [];
         const ev = S.events().filter(e => e.sessionId === SM.session.id);
+        const taskNumMap = SM.buildTaskNumMap(ev);
         const m = new Map();
-        ev.filter(e => e.type === 'TASK_STARTED').forEach(e => 
-            m.set(e.payload.taskId, { id: e.payload.taskId, label: e.payload.label, startedAt: e.timestamp, status: 'ACTIVE' }));
+        
+        ev.filter(e => e.type === 'TASK_STARTED').forEach(e => {
+            const num = e.payload.taskNum || taskNumMap.get(e.payload.taskId) || 0;
+            m.set(e.payload.taskId, { 
+                id: e.payload.taskId, 
+                num,
+                label: e.payload.label, 
+                startedAt: e.timestamp, 
+                status: 'ACTIVE',
+                planned: e.payload.planned || false
+            });
+        });
         ev.filter(e => e.type === 'TASK_COMPLETED').forEach(e => { 
             if (m.has(e.payload.taskId)) { 
                 const t = m.get(e.payload.taskId);
@@ -489,7 +537,7 @@ const SM = {
                 t.status = 'DROP'; t.endedAt = e.timestamp;
             }
         });
-        return Array.from(m.values());
+        return Array.from(m.values()).sort((a,b) => a.num - b.num);
     },
     
     getDecisions(sid = null) {
@@ -500,12 +548,21 @@ const SM = {
             .map(e => ({ choice: e.payload.choice, reason: e.payload.reason, timestamp: e.timestamp }));
     },
     
-    stats: ev => ({
-        completed: ev.filter(e => e.type === 'TASK_COMPLETED').length,
-        failed: ev.filter(e => e.type === 'TASK_FAILED').length,
-        abandoned: ev.filter(e => e.type === 'TASK_ABANDONED').length,
-        decisions: ev.filter(e => e.type === 'DECISION_LOGGED').length
-    }),
+    statsFromEvents: ev => {
+        const tasks = ev.filter(e => e.type === 'TASK_STARTED');
+        const planned = tasks.filter(e => e.payload.planned).length;
+        return {
+            completed: ev.filter(e => e.type === 'TASK_COMPLETED').length,
+            failed: ev.filter(e => e.type === 'TASK_FAILED').length,
+            abandoned: ev.filter(e => e.type === 'TASK_ABANDONED').length,
+            decisions: ev.filter(e => e.type === 'DECISION_LOGGED').length,
+            planned,
+            adhoc: tasks.length - planned
+        };
+    },
+    
+    // Legacy alias
+    stats: ev => SM.statsFromEvents(ev),
     
     fmtDur(s) {
         const m = Math.floor((Date.now() - new Date(s)) / 60000);
@@ -524,7 +581,7 @@ const SM = {
             const load = Cog.calc(s.timestamp, se, S.config(), end?.timestamp || null);
             const endTime = end ? new Date(end.timestamp) : new Date();
             const durMin = Math.round((endTime - new Date(s.timestamp)) / 60000);
-            const stats = SM.stats(se);
+            const stats = SM.statsFromEvents(se);
             
             return {
                 id: s.sessionId,
@@ -546,9 +603,20 @@ const SM = {
     
     getSessionTasks(sid) {
         const ev = S.events().filter(e => e.sessionId === sid);
+        const taskNumMap = SM.buildTaskNumMap(ev);
         const m = new Map();
-        ev.filter(e => e.type === 'TASK_STARTED').forEach(e => 
-            m.set(e.payload.taskId, { id: e.payload.taskId, label: e.payload.label, startedAt: e.timestamp, status: 'ACTIVE' }));
+        
+        ev.filter(e => e.type === 'TASK_STARTED').forEach(e => {
+            const num = e.payload.taskNum || taskNumMap.get(e.payload.taskId) || 0;
+            m.set(e.payload.taskId, { 
+                id: e.payload.taskId, 
+                num,
+                label: e.payload.label, 
+                startedAt: e.timestamp, 
+                status: 'ACTIVE',
+                planned: e.payload.planned || false
+            });
+        });
         ev.filter(e => e.type === 'TASK_COMPLETED').forEach(e => { 
             if (m.has(e.payload.taskId)) { 
                 const t = m.get(e.payload.taskId);
@@ -569,7 +637,50 @@ const SM = {
                 t.status = 'DROP'; t.endedAt = e.timestamp;
             }
         });
-        return Array.from(m.values());
+        return Array.from(m.values()).sort((a,b) => a.num - b.num);
+    },
+    
+    // Search across sessions, tasks, decisions
+    find(query) {
+        if (!query || query.length < 2) return [];
+        const q = query.toLowerCase();
+        const results = [];
+        const sessions = SM.getSessions();
+        
+        sessions.forEach((s, idx) => {
+            // Search intent
+            if (s.intent.toLowerCase().includes(q)) {
+                results.push({ type: 'session', session: s, historyIdx: idx + 1, match: 'intent', text: s.intent });
+            }
+            // Search summary
+            if (s.summary && s.summary.toLowerCase().includes(q)) {
+                results.push({ type: 'session', session: s, historyIdx: idx + 1, match: 'summary', text: s.summary });
+            }
+            // Search tasks
+            const tasks = SM.getSessionTasks(s.id);
+            tasks.forEach(t => {
+                if (t.label.toLowerCase().includes(q)) {
+                    results.push({ type: 'task', session: s, task: t, historyIdx: idx + 1, match: 'task', text: t.label });
+                }
+            });
+            // Search decisions
+            const decisions = SM.getDecisions(s.id);
+            decisions.forEach(d => {
+                if (d.choice.toLowerCase().includes(q) || d.reason.toLowerCase().includes(q)) {
+                    results.push({ type: 'decision', session: s, decision: d, historyIdx: idx + 1, match: 'decision', text: d.choice });
+                }
+            });
+        });
+        
+        // Also search plan queue
+        const plan = S.plan();
+        plan.forEach((item, idx) => {
+            if (item.label.toLowerCase().includes(q)) {
+                results.push({ type: 'plan', planIdx: idx + 1, match: 'plan', text: item.label });
+            }
+        });
+        
+        return results.slice(0, 20); // Limit results
     }
 };
 
@@ -1024,17 +1135,22 @@ const COMMANDS = [
     { cmd: 'enter', desc: 'Start session', usage: 'enter <intent>', ctx: 'idle' },
     { cmd: 'exit', desc: 'End session', usage: 'exit [outcome] [note]', ctx: 'active' },
     { cmd: 'task', desc: 'Start task', usage: 'task <description>', ctx: 'active' },
-    { cmd: 'done', desc: 'Complete task', usage: 'done [id]', ctx: 'has_task' },
-    { cmd: 'fail', desc: 'Fail task', usage: 'fail [id] [reason]', ctx: 'has_task' },
-    { cmd: 'drop', desc: 'Abandon task', usage: 'drop [id]', ctx: 'has_task' },
-    { cmd: 'focus', desc: 'Set focus task', usage: 'focus [id]', ctx: 'has_task' },
+    { cmd: 'done', desc: 'Complete task', usage: 'done [#]', ctx: 'has_task' },
+    { cmd: 'fail', desc: 'Fail task', usage: 'fail [#] [reason]', ctx: 'has_task' },
+    { cmd: 'drop', desc: 'Abandon task', usage: 'drop [#]', ctx: 'has_task' },
+    { cmd: 'focus', desc: 'Set focus task', usage: 'focus [#]', ctx: 'has_task' },
     { cmd: 'tasks', desc: 'List tasks', usage: 'tasks', ctx: 'active' },
     { cmd: 'decide', desc: 'Log decision', usage: 'decide <choice> :: <reason>', ctx: 'active' },
     { cmd: 'status', desc: 'Session status', usage: 'status', ctx: 'active' },
     { cmd: 'decisions', desc: 'List decisions', usage: 'decisions', ctx: 'active' },
     { cmd: 'load', desc: 'Cognitive load', usage: 'load', ctx: 'active' },
+    { cmd: 'plan', desc: 'Preflight plan', usage: 'plan [add|rm|clear] [text|#]', ctx: 'any' },
+    { cmd: 'find', desc: 'Search all', usage: 'find <text>', ctx: 'any' },
     { cmd: 'history', desc: 'Past sessions', usage: 'history [#]', ctx: 'any' },
-    { cmd: 'report', desc: 'Session report', usage: 'report [id|active]', ctx: 'any' },
+    { cmd: 'report', desc: 'Session report', usage: 'report [#|active]', ctx: 'any' },
+    { cmd: 'last', desc: 'Last session report', usage: 'last', ctx: 'any' },
+    { cmd: 'copy', desc: 'Copy to clipboard', usage: 'copy report', ctx: 'any' },
+    { cmd: 'share', desc: 'Share report', usage: 'share report', ctx: 'any' },
     { cmd: 'export', desc: 'Export data', usage: 'export json|csv', ctx: 'any' },
     { cmd: 'config', desc: 'Settings', usage: 'config [key] [value]', ctx: 'any' },
     { cmd: 'scanlines', desc: 'Toggle scanlines', usage: 'scanlines on|off', ctx: 'any' },
@@ -1054,6 +1170,7 @@ const UI = {
     _lastHintKey: null, _lastLoadWarn: null, _lastLoadWarnTime: 0,
     _hudInterval: null,
     _lastHistorySessions: [], // Store last history result for quick access
+    _lastReport: '', // Store last report for copy/share
     
     init() {
         UI.output = $('output');
@@ -1319,13 +1436,13 @@ const UI = {
         const sessionEl = $('hudSession');
         sessionEl.querySelector('span').textContent = `${st.session.intent.slice(0, 15)}${st.session.intent.length > 15 ? '..' : ''} (${st.duration})`;
         
-        // Tasks (show focus task)
+        // Tasks (show focus task with numeric ID)
         const taskEl = $('hudTask');
         if (st.taskCount > 0) {
             const focusTask = st.focusTask || st.activeTasks[st.activeTasks.length - 1];
             const label = st.taskCount > 1 
-                ? `${st.taskCount} active ${focusTask.shortId}` 
-                : `${focusTask.label.slice(0, 15)}${focusTask.label.length > 15 ? '..' : ''} ${focusTask.shortId}`;
+                ? `${st.taskCount} active #${focusTask.num}` 
+                : `#${focusTask.num} ${focusTask.label.slice(0, 12)}${focusTask.label.length > 12 ? '..' : ''}`;
             taskEl.querySelector('span').textContent = label;
         } else {
             taskEl.querySelector('span').textContent = '—';
@@ -1411,17 +1528,102 @@ const UI = {
         // Check tutorial progress
         Tutorial.check(input);
         
+        // Handle !! (repeat last command)
+        if (input.trim() === '!!') {
+            const lastCmd = S.lastCmd();
+            if (!lastCmd) {
+                UI.print('ERR: No previous command', 'error');
+                return;
+            }
+            UI.print(`  (repeating: ${lastCmd})`, 'dim');
+            input = lastCmd;
+        }
+        
         const parts = input.trim().split(/\s+/);
-        const cmd = parts[0].toLowerCase();
-        const args = parts.slice(1).join(' ');
+        let cmd = parts[0].toLowerCase();
+        let args = parts.slice(1).join(' ');
+        
+        // Smart input: detect if this is a known command or freeform
+        const knownCmds = COMMANDS.map(c => c.cmd);
+        const aliases = {
+            e: 'enter', start: 'enter', begin: 'enter',
+            x: 'exit', end: 'exit', quit: 'exit',
+            t: 'task', add: 'task',
+            d: 'done', complete: 'done', finish: 'done',
+            f: 'fail',
+            dec: 'decide',
+            s: 'status', st: 'status',
+            ts: 'tasks',
+            decs: 'decisions',
+            l: 'load',
+            p: 'plan',
+            h: 'history', hist: 'history', ls: 'history',
+            r: 'report', view: 'report', show: 'report',
+            '?': 'help',
+            cls: 'clear',
+            cfg: 'config'
+        };
+        
+        const resolvedCmd = aliases[cmd] || cmd;
+        const isKnownCmd = knownCmds.includes(resolvedCmd) || Object.keys(aliases).includes(cmd);
+        
+        // Freeform input handling
+        if (!isKnownCmd && input.trim().length > 0) {
+            const trimmed = input.trim();
+            
+            // Decision shorthand: ? choice | reason  OR  dec: choice | reason
+            if (trimmed.startsWith('?') || trimmed.toLowerCase().startsWith('dec:')) {
+                if (SM.active()) {
+                    const text = trimmed.startsWith('?') ? trimmed.slice(1).trim() : trimmed.slice(4).trim();
+                    cmd = 'decide';
+                    args = text.replace('|', '::');
+                } else {
+                    UI.print('ERR: No active session for decision', 'error');
+                    UI.updateAll();
+                    return;
+                }
+            }
+            // IDLE: freeform text → enter <intent>
+            else if (!SM.active()) {
+                cmd = 'enter';
+                args = trimmed;
+            }
+            // ACTIVE: freeform text → task <label>
+            else {
+                cmd = 'task';
+                args = trimmed;
+            }
+        }
+        
+        // Save command for !! (but not !! itself)
+        if (input.trim() !== '!!') {
+            S.setLastCmd(input.trim());
+        }
         
         try {
-            UI.handle(cmd, args);
+            UI.handle(resolvedCmd === cmd ? cmd : resolvedCmd, args);
         } catch (e) {
-            UI.print(typeof e === 'string' ? e : e.message, 'error');
+            UI.printError(e, cmd);
         }
         
         UI.updateAll();
+    },
+    
+    // Print error with suggestions
+    printError(e, cmd) {
+        const msg = typeof e === 'string' ? e : e.message;
+        UI.print(msg, 'error');
+        
+        // If unknown command, suggest similar
+        if (msg.includes('Unknown')) {
+            const suggestions = COMMANDS
+                .map(c => c.cmd)
+                .filter(c => c.startsWith(cmd[0]) || c.includes(cmd.slice(0,2)))
+                .slice(0, 3);
+            if (suggestions.length > 0) {
+                UI.print(`  Try: ${suggestions.join(' | ')}`, 'hint');
+            }
+        }
     },
     
     handle(cmd, args) {
@@ -1436,6 +1638,7 @@ const UI = {
             ts: 'tasks',
             decs: 'decisions',
             l: 'load',
+            p: 'plan',
             h: 'history', hist: 'history', ls: 'history',
             r: 'report', view: 'report', show: 'report',
             '?': 'help',
@@ -1453,6 +1656,9 @@ const UI = {
                 UI.print('| >> SESSION STARTED                         |', 'bright');
                 UI.print('+--------------------------------------------+', 'bright');
                 UI.print(`| ${s.intent.slice(0,42).padEnd(42)} |`, 'info');
+                if (s.importedPlan > 0) {
+                    UI.print(`| Imported ${s.importedPlan} planned task(s)`.padEnd(43) + ' |', 'dim');
+                }
                 UI.print('+============================================+', 'bright');
                 break;
             }
@@ -1479,10 +1685,10 @@ const UI = {
             
             case 'task': {
                 const t = SM.task(args);
-                const label = t.label.length > 34 ? t.label.slice(0, 34) + '..' : t.label;
+                const label = t.label.length > 32 ? t.label.slice(0, 32) + '..' : t.label;
                 UI.print('');
                 UI.print('+============================================+', 'info');
-                UI.print(`| * ${t.shortId} ${label.padEnd(34)} |`, 'info');
+                UI.print(`| #${t.num} ${label.padEnd(38)} |`, 'info');
                 UI.print('+============================================+', 'info');
                 if (t.total > 1) UI.print(`  ${t.total} tasks active`, 'dim');
                 break;
@@ -1490,10 +1696,10 @@ const UI = {
             
             case 'done': {
                 const t = SM.done(args || null);
-                const label = t.label.length > 34 ? t.label.slice(0, 34) + '..' : t.label;
+                const label = t.label.length > 32 ? t.label.slice(0, 32) + '..' : t.label;
                 UI.print('');
                 UI.print('+============================================+', 'bright');
-                UI.print(`| + COMPLETED ${t.shortId}`.padEnd(43) + ' |', 'bright');
+                UI.print(`| + COMPLETED #${t.num}`.padEnd(43) + ' |', 'bright');
                 UI.print('+--------------------------------------------+', 'bright');
                 UI.print(`| ${label.padEnd(42)} |`);
                 UI.print(`| Duration: ${t.duration.padEnd(32)} |`, 'dim');
@@ -1504,10 +1710,10 @@ const UI = {
             
             case 'fail': {
                 const t = SM.fail(args);
-                const label = t.label.length > 34 ? t.label.slice(0, 34) + '..' : t.label;
+                const label = t.label.length > 32 ? t.label.slice(0, 32) + '..' : t.label;
                 UI.print('');
                 UI.print('+============================================+', 'error');
-                UI.print(`| x FAILED ${t.shortId}`.padEnd(43) + ' |', 'error');
+                UI.print(`| x FAILED #${t.num}`.padEnd(43) + ' |', 'error');
                 UI.print('+--------------------------------------------+', 'error');
                 UI.print(`| ${label.padEnd(42)} |`);
                 UI.print('+============================================+', 'error');
@@ -1517,10 +1723,10 @@ const UI = {
             
             case 'drop': {
                 const t = SM.drop(args || null);
-                const label = t.label.length > 34 ? t.label.slice(0, 34) + '..' : t.label;
+                const label = t.label.length > 32 ? t.label.slice(0, 32) + '..' : t.label;
                 UI.print('');
                 UI.print('+============================================+', 'warn');
-                UI.print(`| - DROPPED ${t.shortId}`.padEnd(43) + ' |', 'warn');
+                UI.print(`| - DROPPED #${t.num}`.padEnd(43) + ' |', 'warn');
                 UI.print('+--------------------------------------------+', 'warn');
                 UI.print(`| ${label.padEnd(42)} |`);
                 UI.print('+============================================+', 'warn');
@@ -1541,14 +1747,16 @@ const UI = {
                         UI.print('+============================================+', 'bright');
                         UI.print('| >> FOCUS TASK                              |', 'bright');
                         UI.print('+--------------------------------------------+', 'bright');
-                        UI.print(`| ${SM.shortId(ft.id)} ${ft.label.slice(0,34).padEnd(34)} |`, 'info');
+                        UI.print(`| #${ft.num} ${ft.label.slice(0,36).padEnd(36)} |`, 'info');
                         UI.print(`| Duration: ${dur}m`.padEnd(43) + ' |', 'dim');
                         UI.print('+============================================+', 'bright');
+                    } else {
+                        UI.print('NO FOCUS TASK', 'dim');
                     }
                 } else {
                     // Set focus task
                     const t = SM.setFocus(args);
-                    UI.print(`Focus set to: ${t.shortId} ${t.label.slice(0,30)}`, 'info');
+                    UI.print(`Focus set to: #${t.num} ${t.label.slice(0,30)}`, 'info');
                 }
                 break;
             }
@@ -1581,7 +1789,8 @@ const UI = {
                 if (st.taskCount > 0) {
                     UI.print(`| Active Tasks: ${st.taskCount}`.padEnd(43) + ' |', 'info');
                     st.activeTasks.forEach(t => {
-                        UI.print(`|   * ${t.shortId} ${t.label.slice(0,30).padEnd(30)} |`, 'info');
+                        const marker = t.isFocus ? '>' : ' ';
+                        UI.print(`| ${marker} #${t.num} ${t.label.slice(0,32).padEnd(32)} |`, t.isFocus ? 'bright' : 'info');
                     });
                 } else {
                     UI.print('| No active tasks                            |', 'dim');
@@ -1596,7 +1805,7 @@ const UI = {
                 
                 const active = ts.filter(t => t.status === 'ACTIVE');
                 const finished = ts.filter(t => t.status !== 'ACTIVE');
-                const focusId = SM.focusTaskId;
+                const focusNum = SM.focusTaskNum;
                 
                 UI.print('');
                 UI.print('+============================================+', 'bright');
@@ -1607,11 +1816,11 @@ const UI = {
                     UI.print('| -- Active --                               |', 'info');
                     active.forEach(t => {
                         const dur = Math.round((Date.now() - new Date(t.startedAt)) / 60000);
-                        const isFocus = t.id === focusId;
+                        const isFocus = t.num === focusNum;
                         const marker = isFocus ? '>' : '*';
-                        const label = t.label.slice(0, isFocus ? 24 : 26);
-                        const focusTag = isFocus ? ' F' : '';
-                        UI.print(`| ${marker} ${SM.shortId(t.id)} ${label.padEnd(isFocus ? 24 : 26)}${focusTag} ${String(dur).padStart(4)}m |`, isFocus ? 'bright' : 'info');
+                        const planned = t.planned ? 'P' : ' ';
+                        const label = t.label.slice(0, 28);
+                        UI.print(`| ${marker} ${String(t.num).padStart(2)} ${label.padEnd(28)} ${planned} ${String(dur).padStart(3)}m |`, isFocus ? 'bright' : 'info');
                     });
                 }
                 
@@ -1620,9 +1829,9 @@ const UI = {
                     finished.forEach(t => {
                         const icon = t.status === 'DONE' ? '+' : t.status === 'FAIL' ? 'x' : '-';
                         const dur = t.durationMin !== undefined ? `${t.durationMin}m` : '--';
-                        const label = t.label.slice(0, 26);
+                        const label = t.label.slice(0, 28);
                         const cls = t.status === 'FAIL' ? 'error' : t.status === 'DROP' ? 'warn' : 'dim';
-                        UI.print(`| ${icon} ${SM.shortId(t.id)} ${label.padEnd(26)} ${dur.padStart(4)} |`, cls);
+                        UI.print(`| ${icon} ${String(t.num).padStart(2)} ${label.padEnd(28)}   ${dur.padStart(4)} |`, cls);
                     });
                 }
                 
@@ -1811,6 +2020,18 @@ const UI = {
                 }
                 
                 UI.print('+============================================+', 'bright');
+                
+                // Save report for copy/share
+                UI._lastReport = [
+                    `SESSION REPORT${reportData.isActive ? ' (ACTIVE)' : ''}`,
+                    `Intent: ${reportData.intent}`,
+                    `Duration: ${reportData.duration}`,
+                    `Outcome: ${reportData.outcome}`,
+                    `Load: ${reportData.load.level} (${reportData.load.score}/100)`,
+                    `Tasks: ${reportData.stats.completed} done, ${reportData.stats.failed} failed`,
+                    reportData.tasks.length > 0 ? `\nTasks:\n${reportData.tasks.map(t => `  ${t.status === 'DONE' ? '+' : t.status === 'FAIL' ? 'x' : '*'} ${t.label}`).join('\n')}` : '',
+                    reportData.decisions.length > 0 ? `\nDecisions:\n${reportData.decisions.map(d => `  ${d.choice}: ${d.reason}`).join('\n')}` : ''
+                ].filter(Boolean).join('\n');
                 break;
             }
             
@@ -1828,17 +2049,22 @@ const UI = {
                     UI.print('CONFIG', 'bright');
                     UI.print(`safeWindowMinutes: ${cfg.safeWindowMinutes || 90}`);
                     UI.print(`scanlines: ${cfg.scanlines !== false ? 'on' : 'off'}`);
+                    UI.print(`planKeep: ${cfg.planKeep ? 'on' : 'off'}`);
                     UI.print('');
                     UI.print('Use: config <key> <value>', 'hint');
                 } else {
                     const [key, ...vals] = args.split(/\s+/);
-                    const val = vals.join(' ');
+                    const val = vals.join(' ').toLowerCase();
                     if (key === 'safeWindowMinutes') {
                         const n = parseInt(val);
                         if (!n || n < 1) throw 'ERR: Must be positive integer.';
                         cfg.safeWindowMinutes = n;
                         S.set('config', cfg);
                         UI.print(`safeWindowMinutes = ${n}`, 'bright');
+                    } else if (key === 'planKeep') {
+                        cfg.planKeep = val === 'on' || val === 'true' || val === '1';
+                        S.set('config', cfg);
+                        UI.print(`planKeep = ${cfg.planKeep ? 'on' : 'off'}`, 'bright');
                     } else {
                         throw `ERR: Unknown key: ${key}`;
                     }
@@ -1866,9 +2092,105 @@ const UI = {
                 break;
             }
             
+            case 'plan': {
+                const parts = args.trim().split(/\s+/);
+                const subcmd = parts[0]?.toLowerCase() || '';
+                const rest = parts.slice(1).join(' ');
+                const planQueue = S.plan();
+                
+                if (!subcmd || subcmd === 'load') {
+                    if (planQueue.length === 0) {
+                        UI.print('Plan queue empty.', 'dim');
+                        UI.print('  plan add <task>', 'hint');
+                    } else {
+                        UI.print('');
+                        UI.print('+============================================+', 'info');
+                        UI.print(`| >> PLAN QUEUE (${planQueue.length})`.padEnd(43) + ' |', 'info');
+                        UI.print('+--------------------------------------------+', 'info');
+                        planQueue.forEach((item, i) => {
+                            UI.print(`| ${String(i+1).padStart(2)}. ${item.label.slice(0,38).padEnd(38)} |`);
+                        });
+                        UI.print('+============================================+', 'info');
+                    }
+                } else if (subcmd === 'add') {
+                    if (!rest) throw 'ERR: plan add <task>';
+                    planQueue.push({ label: rest, addedAt: new Date().toISOString() });
+                    S.setPlan(planQueue);
+                    UI.print(`Planned #${planQueue.length}: ${rest.slice(0,35)}`, 'info');
+                } else if (subcmd === 'rm' || subcmd === 'remove') {
+                    const idx = parseInt(rest) - 1;
+                    if (isNaN(idx) || idx < 0 || idx >= planQueue.length) {
+                        throw `ERR: Invalid index. Range: 1-${planQueue.length}`;
+                    }
+                    const removed = planQueue.splice(idx, 1)[0];
+                    S.setPlan(planQueue);
+                    UI.print(`Removed: ${removed.label.slice(0,40)}`, 'dim');
+                } else if (subcmd === 'clear') {
+                    S.setPlan([]);
+                    UI.print('Plan cleared.', 'dim');
+                } else {
+                    const label = args.trim();
+                    planQueue.push({ label, addedAt: new Date().toISOString() });
+                    S.setPlan(planQueue);
+                    UI.print(`Planned #${planQueue.length}: ${label.slice(0,35)}`, 'info');
+                }
+                break;
+            }
+            
+            case 'find': {
+                if (!args || args.length < 2) throw 'ERR: find <text> (min 2 chars)';
+                const results = SM.find(args);
+                if (results.length === 0) {
+                    UI.print(`No results for "${args}"`, 'dim');
+                } else {
+                    UI.print(`Found ${results.length} for "${args}":`);
+                    results.slice(0, 10).forEach(r => {
+                        if (r.type === 'plan') {
+                            UI.print(`  [PLAN] ${r.text.slice(0,38)}`, 'info');
+                        } else {
+                            UI.print(`  [#${r.historyIdx}] ${r.type}: ${r.text.slice(0,30)}`, 'dim');
+                        }
+                    });
+                    if (results.length > 10) UI.print(`  +${results.length - 10} more`, 'dim');
+                }
+                break;
+            }
+            
+            case 'last': {
+                const sessions = SM.getSessions();
+                if (sessions.length === 0) throw 'NO SESSIONS';
+                UI.handle('report', sessions[0].id);
+                break;
+            }
+            
+            case 'copy': {
+                if (args.toLowerCase() !== 'report') throw 'Usage: copy report';
+                const text = UI._lastReport || 'No report yet.';
+                navigator.clipboard.writeText(text).then(() => {
+                    UI.print('Copied to clipboard.', 'bright');
+                }).catch(() => {
+                    UI.print('ERR: Clipboard denied.', 'error');
+                });
+                break;
+            }
+            
+            case 'share': {
+                if (args.toLowerCase() !== 'report') throw 'Usage: share report';
+                const text = UI._lastReport || 'No report yet.';
+                if (navigator.share) {
+                    navigator.share({ title: 'OSC Report', text }).catch(() => {});
+                } else {
+                    navigator.clipboard.writeText(text).then(() => {
+                        UI.print('Copied (no share API).', 'bright');
+                    }).catch(() => {
+                        UI.print('ERR: Share unavailable.', 'error');
+                    });
+                }
+                break;
+            }
+            
             case 'clear':
                 UI.output.innerHTML = '';
-                break;
                 break;
             
             case 'tutorial':
@@ -1908,49 +2230,69 @@ const UI = {
                 UI.print('');
                 UI.print('SESSION', 'bright');
                 UI.print('  enter <intent>        Start session');
-                UI.print('  exit [outcome]        End session');
+                UI.print('  exit [outcome]        End (completed/aborted)');
                 UI.print('  status                Current status');
                 UI.print('');
-                UI.print('TASKS', 'bright');
-                UI.print('  task <description>    Start task (focus)');
-                UI.print('  done [id]             Complete (focus)');
-                UI.print('  fail [id] [reason]    Mark failed');
-                UI.print('  drop [id]             Abandon task');
-                UI.print('  focus [id]            Set/show focus');
+                UI.print('TASKS (numeric IDs: #1, #2...)', 'bright');
+                UI.print('  task <desc>           Start task (→focus)');
+                UI.print('  done [#]              Complete (focus)');
+                UI.print('  fail [#] [reason]     Mark failed');
+                UI.print('  drop [#]              Abandon task');
+                UI.print('  focus [#]             Set/show focus');
                 UI.print('  tasks                 List all');
+                UI.print('');
+                UI.print('PLANNING (preflight)', 'bright');
+                UI.print('  plan                  Show plan queue');
+                UI.print('  plan add <task>       Add to plan');
+                UI.print('  plan rm <#>           Remove from plan');
+                UI.print('  plan clear            Clear plan');
+                UI.print('  (on enter: plan→tasks with P marker)');
                 UI.print('');
                 UI.print('DECISIONS', 'bright');
                 UI.print('  decide <X> :: <Y>     Log decision');
+                UI.print('  ? <X> | <Y>           Quick decision');
                 UI.print('  decisions             List all');
                 UI.print('');
-                UI.print('MONITORING', 'bright');
-                UI.print('  load                  Cognitive load');
+                UI.print('VIEW', 'bright');
                 UI.print('  history               Sessions list (#)');
-                UI.print('  history <#>           View report by #');
-                UI.print('  report                Last session');
+                UI.print('  history <#>           Report by index');
+                UI.print('  report                Last completed');
                 UI.print('  report active         Current session');
                 UI.print('  report <id>           By session ID');
+                UI.print('  last                  = report (shortcut)');
+                UI.print('  find <text>           Search all data');
+                UI.print('  load                  Cognitive load meter');
                 UI.print('');
                 UI.print('DATA', 'bright');
-                UI.print('  export json|csv       Export data');
-                UI.print('  config                Settings');
+                UI.print('  copy report           Copy to clipboard');
+                UI.print('  share report          Share API (mobile)');
+                UI.print('  export json|csv       Export all data');
+                UI.print('  config                Show settings');
+                UI.print('  config <key> <val>    Change setting');
                 UI.print('  scanlines on|off      CRT effect');
-                UI.print('  reset confirm         Delete all');
+                UI.print('  reset confirm         DELETE ALL DATA');
+                UI.print('');
+                UI.print('SMART INPUT', 'bright');
+                UI.print('  (any text)            IDLE→enter, ACT→task');
+                UI.print('  ? choice | reason     Quick decision');
+                UI.print('  !!                    Repeat last command');
                 UI.print('');
                 UI.print('OTHER', 'bright');
                 UI.print('  tutorial              Interactive guide');
-                UI.print('  help                  This reference');
                 UI.print('  clear                 Clear screen');
+                UI.print('  help                  This reference');
                 UI.print('');
                 UI.print('TIPS', 'bright');
-                UI.print('  Tab/tap >  Autocomplete');
-                UI.print('  ↑/↓        Command history');
+                UI.print('  Tab / tap >           Autocomplete');
+                UI.print('  ↑ / ↓                 Command history');
+                UI.print('  P in tasks            Planned (from plan)');
+                UI.print('  > in tasks            Focus task');
                 UI.print('');
                 UI.print('+============================================+', 'bright');
                 break;
             
             default:
-                throw `ERR: Unknown: "${cmd}". Type "help" or press Tab.`;
+                throw `ERR: Unknown: "${cmd}". Type "help".`;
         }
     }
 };
