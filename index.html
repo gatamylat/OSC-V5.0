@@ -75,6 +75,7 @@
         .hud-item span { color: var(--text); }
         .hud-item.warn span { color: var(--warn); }
         .hud-item.err span { color: var(--err); }
+        .hud-intent { display: none; } /* Hidden on mobile */
         
         /* === TERMINAL === */
         .terminal {
@@ -147,6 +148,196 @@
         .ac-item:hover, .ac-item.selected { background: var(--bg3); }
         .ac-item-cmd { color: var(--text); }
         .ac-item-desc { color: var(--dim); font-size: 8px; }
+        
+        /* ============================================= */
+        /* TABLET / IPAD ADAPTIVE (iPad mini 7: 744px+) */
+        /* ============================================= */
+        
+        @media (min-width: 600px) {
+            body {
+                font-size: 11px;
+            }
+            
+            .status-bar {
+                font-size: 11px;
+                padding: 8px 20px;
+                padding-top: calc(8px + env(safe-area-inset-top));
+            }
+            
+            .hud {
+                font-size: 11px;
+                padding: 8px 20px;
+                top: calc(38px + env(safe-area-inset-top));
+            }
+            
+            .hud-intent {
+                display: block; /* Show intent on tablets */
+            }
+            
+            .terminal {
+                padding: 15px 20px;
+                padding-top: calc(50px + env(safe-area-inset-top));
+                padding-bottom: calc(130px + env(safe-area-inset-bottom));
+                max-width: 900px;
+                margin: 0 auto;
+            }
+            .terminal.with-hud {
+                padding-top: calc(85px + env(safe-area-inset-top));
+            }
+            
+            .console-output {
+                font-size: 11px;
+            }
+            
+            .quick-actions {
+                bottom: calc(60px + env(safe-area-inset-bottom));
+                padding: 10px 20px;
+                gap: 8px;
+            }
+            
+            .quick-btn {
+                padding: 8px 16px;
+                font-size: 10px;
+            }
+            
+            .cmd-bar {
+                padding: 15px 20px;
+                padding-bottom: calc(15px + env(safe-area-inset-bottom));
+            }
+            
+            .cmd-prompt {
+                font-size: 14px;
+                padding: 12px 8px 12px 0;
+            }
+            
+            .cmd-input {
+                font-size: 12px;
+                padding: 8px 0;
+            }
+            
+            .autocomplete {
+                bottom: calc(100px + env(safe-area-inset-bottom));
+                left: 20px;
+                right: 20px;
+                max-width: 860px;
+                margin: 0 auto;
+            }
+            
+            .ac-item {
+                padding: 10px 15px;
+                font-size: 11px;
+            }
+            
+            .ac-item-desc {
+                font-size: 10px;
+            }
+        }
+        
+        /* iPad Landscape / Large tablets (1000px+) */
+        @media (min-width: 1000px) {
+            body {
+                font-size: 12px;
+            }
+            
+            .status-bar {
+                font-size: 12px;
+                padding: 10px 30px;
+            }
+            
+            .hud {
+                font-size: 12px;
+                padding: 10px 30px;
+                gap: 30px;
+            }
+            
+            .terminal {
+                padding: 20px 30px;
+                max-width: 1000px;
+            }
+            
+            .console-output {
+                font-size: 12px;
+                line-height: 1.5;
+            }
+            
+            .line {
+                margin-bottom: 2px;
+            }
+            
+            .quick-actions {
+                max-width: 1000px;
+                margin: 0 auto;
+                left: 50%;
+                transform: translateX(-50%);
+                padding: 12px 30px;
+            }
+            
+            .quick-btn {
+                padding: 10px 20px;
+                font-size: 11px;
+            }
+            
+            .cmd-bar {
+                max-width: 1000px;
+                left: 50%;
+                transform: translateX(-50%);
+                padding: 15px 30px;
+                border-radius: 8px 8px 0 0;
+                border-left: 1px solid var(--border);
+                border-right: 1px solid var(--border);
+            }
+            
+            .cmd-input {
+                font-size: 13px;
+            }
+            
+            .autocomplete {
+                max-width: 940px;
+                left: 50%;
+                transform: translateX(-50%);
+            }
+        }
+        
+        /* Landscape orientation optimizations */
+        @media (orientation: landscape) and (min-width: 600px) {
+            .hud {
+                gap: 25px;
+            }
+            
+            .hud-item {
+                white-space: nowrap;
+            }
+            
+            .terminal {
+                padding-bottom: calc(110px + env(safe-area-inset-bottom));
+            }
+            
+            .quick-actions {
+                bottom: calc(50px + env(safe-area-inset-bottom));
+            }
+        }
+        
+        /* Touch-friendly tap targets for tablets */
+        @media (pointer: coarse) and (min-width: 600px) {
+            .quick-btn {
+                min-height: 44px;
+                min-width: 60px;
+            }
+            
+            .cmd-prompt {
+                min-width: 44px;
+                min-height: 44px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            
+            .ac-item {
+                min-height: 44px;
+                display: flex;
+                align-items: center;
+            }
+        }
     </style>
 </head>
 <body>
@@ -157,8 +348,10 @@
     
     <div class="hud" id="hud">
         <div class="hud-item" id="hudSession">SESSION: <span>—</span></div>
+        <div class="hud-item hud-intent" id="hudIntent">INTENT: <span>—</span></div>
         <div class="hud-item" id="hudTask">TASK: <span>—</span></div>
         <div class="hud-item" id="hudLoad">LOAD: <span>—</span></div>
+        <div class="hud-item" id="hudStreak">STREAK: <span>—</span></div>
     </div>
     
     <div class="terminal" id="terminal">
@@ -179,7 +372,7 @@
 // OSC — OPERATOR SESSION CONSOLE
 // ===========================================================================
 
-const APP_VERSION = '5.1';
+const APP_VERSION = '5.3';
 
 const $ = id => document.getElementById(id);
 const S = {
@@ -187,11 +380,15 @@ const S = {
     set: (k, v) => localStorage.setItem('osc_' + k, JSON.stringify(v)),
     events: () => S.get('events') || [],
     append: e => { const ev = S.events(); ev.push(e); S.set('events', ev); return e; },
-    config: () => S.get('config') || { safeWindowMinutes: 90, planKeep: false },
+    config: () => S.get('config') || { safeWindowMinutes: 90, planKeep: false, flatlineScore: 85 },
     plan: () => S.get('plan') || [],
     setPlan: p => S.set('plan', p),
     lastCmd: () => S.get('lastCmd') || '',
-    setLastCmd: c => S.set('lastCmd', c)
+    setLastCmd: c => S.set('lastCmd', c),
+    lastIntent: () => S.get('lastIntent') || '',
+    setLastIntent: i => S.set('lastIntent', i),
+    templates: () => S.get('templates') || {},
+    setTemplates: t => S.set('templates', t)
 };
 
 // ===========================================================================
@@ -245,7 +442,7 @@ const Cog = {
 };
 
 // ===========================================================================
-// SESSION MANAGER (Numeric task IDs, Plan support)
+// SESSION MANAGER (Numeric task IDs, Plan support, Streak tracking)
 // ===========================================================================
 
 const SM = {
@@ -253,6 +450,8 @@ const SM = {
     tasks: new Map(),      // taskNum -> task object
     focusTaskNum: null,    // Current focus task (numeric)
     nextTaskNum: 1,        // Session-scoped task counter
+    streak: 0,             // Consecutive completed tasks
+    lastStreakTime: null,  // Time of last streak update
     
     genId: p => `${Date.now()}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
     
@@ -363,6 +562,11 @@ const SM = {
         SM.tasks.clear();
         SM.focusTaskNum = null;
         SM.nextTaskNum = 1;
+        SM.streak = 0;
+        SM.lastStreakTime = Date.now();
+        
+        // Save intent for 'again' command
+        S.setLastIntent(intent);
         
         // Import plan queue
         const planQueue = S.plan();
@@ -428,7 +632,10 @@ const SM = {
             const nums = Array.from(SM.tasks.keys()).sort((a,b) => b - a);
             SM.focusTaskNum = nums.length > 0 ? nums[0] : null;
         }
-        return { ...t, duration: SM.fmtDur(t.startedAt), remaining: SM.tasks.size };
+        // Streak: increment on done
+        SM.streak++;
+        SM.lastStreakTime = Date.now();
+        return { ...t, duration: SM.fmtDur(t.startedAt), remaining: SM.tasks.size, streak: SM.streak };
     },
     
     fail(args = '') {
@@ -452,6 +659,8 @@ const SM = {
             const nums = Array.from(SM.tasks.keys()).sort((a,b) => b - a);
             SM.focusTaskNum = nums.length > 0 ? nums[0] : null;
         }
+        // Streak: reset on fail
+        SM.streak = 0;
         return { ...t, reason, remaining: SM.tasks.size };
     },
     
@@ -466,6 +675,8 @@ const SM = {
             const nums = Array.from(SM.tasks.keys()).sort((a,b) => b - a);
             SM.focusTaskNum = nums.length > 0 ? nums[0] : null;
         }
+        // Streak: reset on drop
+        SM.streak = 0;
         return { ...t, remaining: SM.tasks.size };
     },
     
@@ -486,9 +697,12 @@ const SM = {
         if (!SM.session) return null;
         const ev = S.events().filter(e => e.sessionId === SM.session.id);
         const focusTask = SM.getFocusTask();
+        const startMs = new Date(SM.session.startedAt).getTime();
+        const durationSec = Math.floor((Date.now() - startMs) / 1000);
         return {
             session: SM.session,
             duration: SM.fmtDur(SM.session.startedAt),
+            durationSec,
             activeTasks: Array.from(SM.tasks.values()).map(t => ({ 
                 ...t, 
                 isFocus: t.num === SM.focusTaskNum
@@ -496,7 +710,8 @@ const SM = {
             focusTask: focusTask ? { ...focusTask } : null,
             taskCount: SM.tasks.size,
             stats: SM.statsFromEvents(ev),
-            load: Cog.calc(SM.session.startedAt, ev)
+            load: Cog.calc(SM.session.startedAt, ev),
+            streak: SM.streak
         };
     },
     
@@ -1133,6 +1348,7 @@ const Tutorial = {
 
 const COMMANDS = [
     { cmd: 'enter', desc: 'Start session', usage: 'enter <intent>', ctx: 'idle' },
+    { cmd: 'again', desc: 'Restart session', usage: 'again [intent]', ctx: 'idle' },
     { cmd: 'exit', desc: 'End session', usage: 'exit [outcome] [note]', ctx: 'active' },
     { cmd: 'task', desc: 'Start task', usage: 'task <description>', ctx: 'active' },
     { cmd: 'done', desc: 'Complete task', usage: 'done [#]', ctx: 'has_task' },
@@ -1145,6 +1361,7 @@ const COMMANDS = [
     { cmd: 'decisions', desc: 'List decisions', usage: 'decisions', ctx: 'active' },
     { cmd: 'load', desc: 'Cognitive load', usage: 'load', ctx: 'active' },
     { cmd: 'plan', desc: 'Preflight plan', usage: 'plan [add|rm|clear] [text|#]', ctx: 'any' },
+    { cmd: 'template', desc: 'Session templates', usage: 'template [save|load|rm|list] [name]', ctx: 'any' },
     { cmd: 'find', desc: 'Search all', usage: 'find <text>', ctx: 'any' },
     { cmd: 'history', desc: 'Past sessions', usage: 'history [#]', ctx: 'any' },
     { cmd: 'report', desc: 'Session report', usage: 'report [#|active]', ctx: 'any' },
@@ -1171,6 +1388,7 @@ const UI = {
     _hudInterval: null,
     _lastHistorySessions: [], // Store last history result for quick access
     _lastReport: '', // Store last report for copy/share
+    _flatlineTriggered: false, // Prevent multiple flatline triggers
     
     init() {
         UI.output = $('output');
@@ -1226,8 +1444,8 @@ const UI = {
         UI.updateAll();
         UI.input.focus();
         
-        // Live HUD update every 30s
-        UI._hudInterval = setInterval(() => { if (SM.active()) UI.updateHUD(); }, 30000);
+        // Live HUD update every 1s for ambient timer
+        UI._hudInterval = setInterval(() => { if (SM.active()) UI.updateHUD(); }, 1000);
         
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('./sw.js').catch(() => {});
@@ -1432,9 +1650,22 @@ const UI = {
         
         const st = SM.status();
         
-        // Session
+        // Session with ambient timer (h:mm:ss)
         const sessionEl = $('hudSession');
-        sessionEl.querySelector('span').textContent = `${st.session.intent.slice(0, 15)}${st.session.intent.length > 15 ? '..' : ''} (${st.duration})`;
+        const h = Math.floor(st.durationSec / 3600);
+        const m = Math.floor((st.durationSec % 3600) / 60);
+        const s = st.durationSec % 60;
+        const timer = `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+        sessionEl.querySelector('span').textContent = timer;
+        
+        // Intent (visible on tablets)
+        const intentEl = $('hudIntent');
+        if (intentEl) {
+            const intentText = st.session.intent.length > 25 
+                ? st.session.intent.slice(0, 25) + '..' 
+                : st.session.intent;
+            intentEl.querySelector('span').textContent = intentText;
+        }
         
         // Tasks (show focus task with numeric ID)
         const taskEl = $('hudTask');
@@ -1455,6 +1686,15 @@ const UI = {
         if (st.load.level === 'HIGH') loadEl.classList.add('warn');
         if (st.load.level === 'CRITICAL') loadEl.classList.add('err');
         
+        // Streak
+        const streakEl = $('hudStreak');
+        if (st.streak > 0) {
+            streakEl.querySelector('span').textContent = `${st.streak} done`;
+            streakEl.style.display = '';
+        } else {
+            streakEl.style.display = 'none';
+        }
+        
         // Load warnings with cooldown (10 min = 600000ms)
         const now = Date.now();
         const cooldown = 600000;
@@ -1471,6 +1711,26 @@ const UI = {
             }
         }
         UI._lastLoadWarn = st.load.level;
+        
+        // FLATLINE detection: auto-exit at extreme load
+        const cfg = S.config();
+        const flatlineScore = cfg.flatlineScore || 85;
+        if (st.load.score >= flatlineScore && !UI._flatlineTriggered) {
+            UI._flatlineTriggered = true;
+            UI.print('', '');
+            UI.print('!! ═══════════════════════════════════════ !!', 'error');
+            UI.print('!!              F L A T L I N E             !!', 'error');
+            UI.print('!! ═══════════════════════════════════════ !!', 'error');
+            UI.print(`!! Load ${st.load.score}% exceeded threshold ${flatlineScore}%`, 'error');
+            UI.print('!! Session auto-saved. Take a break.        !!', 'error');
+            UI.print('!! ═══════════════════════════════════════ !!', 'error');
+            // Auto-exit
+            try {
+                const r = SM.exit('FLATLINE', `Auto-exit: load ${st.load.score}%`);
+                UI.print(`Session saved: ${r.duration}, ${r.stats.completed} tasks done`, 'dim');
+            } catch(e) {}
+            UI.updateAll();
+        }
     },
     
     // === STATUS BAR ===
@@ -1651,6 +1911,7 @@ const UI = {
         switch (c) {
             case 'enter': {
                 const s = SM.enter(args);
+                UI._flatlineTriggered = false; // Reset flatline
                 UI.print('');
                 UI.print('+============================================+', 'bright');
                 UI.print('| >> SESSION STARTED                         |', 'bright');
@@ -1660,6 +1921,15 @@ const UI = {
                     UI.print(`| Imported ${s.importedPlan} planned task(s)`.padEnd(43) + ' |', 'dim');
                 }
                 UI.print('+============================================+', 'bright');
+                break;
+            }
+            
+            case 'again': {
+                if (SM.active()) throw 'ERR: Session active. Use "exit" first.';
+                const lastIntent = S.lastIntent();
+                const intent = args || lastIntent;
+                if (!intent) throw 'ERR: No previous intent. Usage: again [intent]';
+                UI.handle('enter', intent);
                 break;
             }
             
@@ -1703,6 +1973,9 @@ const UI = {
                 UI.print('+--------------------------------------------+', 'bright');
                 UI.print(`| ${label.padEnd(42)} |`);
                 UI.print(`| Duration: ${t.duration.padEnd(32)} |`, 'dim');
+                if (t.streak > 1) {
+                    UI.print(`| Streak: ${t.streak} tasks in a row!`.padEnd(43) + ' |', 'info');
+                }
                 UI.print('+============================================+', 'bright');
                 if (t.remaining > 0) UI.print(`  ${t.remaining} task(s) remaining`, 'dim');
                 break;
@@ -2048,6 +2321,7 @@ const UI = {
                 if (!args) {
                     UI.print('CONFIG', 'bright');
                     UI.print(`safeWindowMinutes: ${cfg.safeWindowMinutes || 90}`);
+                    UI.print(`flatlineScore: ${cfg.flatlineScore || 85}`);
                     UI.print(`scanlines: ${cfg.scanlines !== false ? 'on' : 'off'}`);
                     UI.print(`planKeep: ${cfg.planKeep ? 'on' : 'off'}`);
                     UI.print('');
@@ -2061,6 +2335,12 @@ const UI = {
                         cfg.safeWindowMinutes = n;
                         S.set('config', cfg);
                         UI.print(`safeWindowMinutes = ${n}`, 'bright');
+                    } else if (key === 'flatlineScore') {
+                        const n = parseInt(val);
+                        if (!n || n < 50 || n > 100) throw 'ERR: Must be 50-100.';
+                        cfg.flatlineScore = n;
+                        S.set('config', cfg);
+                        UI.print(`flatlineScore = ${n}`, 'bright');
                     } else if (key === 'planKeep') {
                         cfg.planKeep = val === 'on' || val === 'true' || val === '1';
                         S.set('config', cfg);
@@ -2133,6 +2413,54 @@ const UI = {
                     planQueue.push({ label, addedAt: new Date().toISOString() });
                     S.setPlan(planQueue);
                     UI.print(`Planned #${planQueue.length}: ${label.slice(0,35)}`, 'info');
+                }
+                break;
+            }
+            
+            case 'template': {
+                const parts = args.trim().split(/\s+/);
+                const subcmd = parts[0]?.toLowerCase() || '';
+                const name = parts.slice(1).join(' ') || parts[1];
+                const templates = S.templates();
+                
+                if (!subcmd || subcmd === 'list') {
+                    const names = Object.keys(templates);
+                    if (names.length === 0) {
+                        UI.print('No templates saved.', 'dim');
+                        UI.print('  template save <name>', 'hint');
+                    } else {
+                        UI.print('');
+                        UI.print('TEMPLATES:', 'bright');
+                        names.forEach(n => {
+                            const t = templates[n];
+                            UI.print(`  ${n} (${t.tasks.length} tasks)`, 'info');
+                        });
+                    }
+                } else if (subcmd === 'save') {
+                    if (!name) throw 'ERR: template save <name>';
+                    const planQueue = S.plan();
+                    if (planQueue.length === 0) throw 'ERR: Plan queue empty. Add tasks first.';
+                    templates[name] = {
+                        tasks: planQueue.map(p => p.label),
+                        savedAt: new Date().toISOString()
+                    };
+                    S.setTemplates(templates);
+                    UI.print(`Template "${name}" saved (${planQueue.length} tasks)`, 'bright');
+                } else if (subcmd === 'load') {
+                    if (!name) throw 'ERR: template load <name>';
+                    const t = templates[name];
+                    if (!t) throw `ERR: Template "${name}" not found`;
+                    const planQueue = t.tasks.map(label => ({ label, addedAt: new Date().toISOString() }));
+                    S.setPlan(planQueue);
+                    UI.print(`Loaded "${name}" → ${planQueue.length} tasks in plan`, 'info');
+                } else if (subcmd === 'rm' || subcmd === 'remove' || subcmd === 'delete') {
+                    if (!name) throw 'ERR: template rm <name>';
+                    if (!templates[name]) throw `ERR: Template "${name}" not found`;
+                    delete templates[name];
+                    S.setTemplates(templates);
+                    UI.print(`Template "${name}" deleted`, 'dim');
+                } else {
+                    throw 'ERR: template [list|save|load|rm] <name>';
                 }
                 break;
             }
@@ -2230,6 +2558,7 @@ const UI = {
                 UI.print('');
                 UI.print('SESSION', 'bright');
                 UI.print('  enter <intent>        Start session');
+                UI.print('  again [intent]        Re-enter (last intent)');
                 UI.print('  exit [outcome]        End (completed/aborted)');
                 UI.print('  status                Current status');
                 UI.print('');
@@ -2246,7 +2575,12 @@ const UI = {
                 UI.print('  plan add <task>       Add to plan');
                 UI.print('  plan rm <#>           Remove from plan');
                 UI.print('  plan clear            Clear plan');
-                UI.print('  (on enter: plan→tasks with P marker)');
+                UI.print('');
+                UI.print('TEMPLATES (constructs)', 'bright');
+                UI.print('  template              List saved');
+                UI.print('  template save <name>  Save plan as template');
+                UI.print('  template load <name>  Load template to plan');
+                UI.print('  template rm <name>    Delete template');
                 UI.print('');
                 UI.print('DECISIONS', 'bright');
                 UI.print('  decide <X> :: <Y>     Log decision');
@@ -2256,10 +2590,8 @@ const UI = {
                 UI.print('VIEW', 'bright');
                 UI.print('  history               Sessions list (#)');
                 UI.print('  history <#>           Report by index');
-                UI.print('  report                Last completed');
-                UI.print('  report active         Current session');
-                UI.print('  report <id>           By session ID');
-                UI.print('  last                  = report (shortcut)');
+                UI.print('  report [active]       Current/last session');
+                UI.print('  last                  Last session report');
                 UI.print('  find <text>           Search all data');
                 UI.print('  load                  Cognitive load meter');
                 UI.print('');
@@ -2282,11 +2614,15 @@ const UI = {
                 UI.print('  clear                 Clear screen');
                 UI.print('  help                  This reference');
                 UI.print('');
-                UI.print('TIPS', 'bright');
-                UI.print('  Tab / tap >           Autocomplete');
-                UI.print('  ↑ / ↓                 Command history');
-                UI.print('  P in tasks            Planned (from plan)');
-                UI.print('  > in tasks            Focus task');
+                UI.print('HUD (always visible)', 'bright');
+                UI.print('  SESSION h:mm:ss       Ambient timer');
+                UI.print('  TASK #N               Focus task');
+                UI.print('  LOAD level score      Cognitive load');
+                UI.print('  STREAK N done         Consecutive completions');
+                UI.print('');
+                UI.print('SAFETY', 'bright');
+                UI.print('  Flatline at 85%       Auto-exit (configurable)');
+                UI.print('  config flatlineScore  Set threshold (50-100)');
                 UI.print('');
                 UI.print('+============================================+', 'bright');
                 break;
